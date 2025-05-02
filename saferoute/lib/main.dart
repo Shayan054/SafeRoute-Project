@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'ui/screens/main_screen.dart';
 import 'ui/screens/home_dashboard.dart';
-// You can import other screens later like HomeScreen, etc.
+import 'package:firebase_core/firebase_core.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+
   runApp(const SafeRouteApp());
 }
 
@@ -24,7 +27,6 @@ class SafeRouteApp extends StatelessWidget {
       routes: {
         '/': (context) => const MainScreen(),
         '/home': (context) => const HomeDashboard(),
-        // Replace this with your actual HomePage widget later
       },
     );
   }
