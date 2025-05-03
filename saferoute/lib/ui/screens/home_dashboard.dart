@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../widgets/dashboard_card.dart';
 import '../constants/colors.dart';
+import 'crime_statistics_page.dart';
 
 class HomeDashboard extends StatelessWidget {
   const HomeDashboard({super.key});
@@ -29,7 +30,7 @@ class HomeDashboard extends StatelessWidget {
                 imagePath: "assets/images/map.jpg",
                 buttonText: "View Map",
                 onPressed: () {
-                  // Navigate to map screen
+                  // TODO: Navigate to map screen
                 },
               ),
               const SizedBox(height: 16),
@@ -39,7 +40,12 @@ class HomeDashboard extends StatelessWidget {
                 imagePath: "assets/images/stats.jpg",
                 buttonText: "View Stats",
                 onPressed: () {
-                  // Navigate to stats screen
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const CrimeStatisticsPage(),
+                    ),
+                  );
                 },
               ),
               const SizedBox(height: 16),
