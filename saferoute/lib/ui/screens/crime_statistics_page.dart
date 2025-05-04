@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
-import '../../services/firestore_service.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import '../../services/firestore_service.dart';
 
 class CrimeStatisticsPage extends StatefulWidget {
   const CrimeStatisticsPage({Key? key}) : super(key: key);
@@ -12,9 +14,35 @@ class CrimeStatisticsPage extends StatefulWidget {
 class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
   String? selectedCity;
   Map<String, int> crimeStats = {};
+  List<Map<String, dynamic>> crimeLocations = [];
   bool isLoading = false;
+  List<String> cities = [];
 
-  final List<String> cities = ['Lahore', 'Karachi', 'Islamabad'];
+  @override
+  void initState() {
+    super.initState();
+    _loadCities();
+  }
+
+  Future<void> _loadCities() async {
+    final cityList = await FirestoreService().getAllCities();
+    setState(() {
+      cities = cityList;
+    });
+  }
+
+  Future<void> _fetchData(String city) async {
+    setState(() {
+      isLoading = true;
+    });
+    final stats = await FirestoreService().getCrimeStatsByCity(city);
+    final locations = await FirestoreService().getCrimeLocationsByCity(city);
+    setState(() {
+      crimeStats = stats;
+      crimeLocations = locations;
+      isLoading = false;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,15 +82,8 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
                     );
                   }).toList(),
                   onChanged: (value) async {
-                    setState(() {
-                      selectedCity = value;
-                      isLoading = true;
-                    });
-                    final stats = await FirestoreService().getCrimeStatsByCity(value!);
-                    setState(() {
-                      crimeStats = stats;
-                      isLoading = false;
-                    });
+                    selectedCity = value;
+                    await _fetchData(value!);
                   },
                 ),
               ),
@@ -72,7 +93,7 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
               const Center(child: CircularProgressIndicator())
             else if (crimeStats.isNotEmpty)
               Expanded(
-                child: Column(
+                child: ListView(
                   children: [
                     const Text("Crime Distribution (Pie Chart)",
                         style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
@@ -83,6 +104,14 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
                         style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                     const SizedBox(height: 12),
                     SizedBox(height: 200, child: _buildBarChart()),
+                    const SizedBox(height: 24),
+                    const Text("Crime Density (Heatmap)",
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      height: 300,
+                      child: _buildHeatmap(),
+                    ),
                   ],
                 ),
               )
@@ -181,6 +210,41 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
         borderData: FlBorderData(show: false),
         gridData: FlGridData(show: true),
       ),
+    );
+  }
+
+  Widget _buildHeatmap() {
+    // Define city coordinates
+    final cityCoordinates = {
+      'Lahore': LatLng(31.5204, 74.3587),
+      'Islamabad': LatLng(33.6844, 73.0479),
+      'Karachi': LatLng(24.8607, 67.0011),
+    };
+
+    // Use the selected city's coordinates, default to Lahore if not found
+    final center = cityCoordinates[selectedCity] ?? LatLng(31.5204, 74.3587);
+
+    return FlutterMap(
+      options: MapOptions(
+        initialCenter: center,
+        initialZoom: 11,
+      ),
+      children: [
+        TileLayer(
+          urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          subdomains: ['a', 'b', 'c'],
+        ),
+        CircleLayer(
+          circles: crimeLocations.map((location) {
+            return CircleMarker(
+              point: LatLng(location['lat'], location['lng']),
+              radius: 10,
+              color: Colors.red.withOpacity(0.5),
+              useRadiusInMeter: false,
+            );
+          }).toList(),
+        ),
+      ],
     );
   }
 }
