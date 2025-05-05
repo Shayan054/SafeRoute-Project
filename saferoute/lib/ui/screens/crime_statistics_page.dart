@@ -55,7 +55,6 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -75,6 +74,7 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
                 child: DropdownButton<String>(
                   value: selectedCity,
                   hint: const Text('Select City'),
+                  isExpanded: true,
                   items: cities.map((city) {
                     return DropdownMenuItem(
                       value: city,
@@ -90,25 +90,25 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
             ),
             const SizedBox(height: 20),
             if (isLoading)
-              const Center(child: CircularProgressIndicator())
+              const Expanded(child: Center(child: CircularProgressIndicator()))
             else if (crimeStats.isNotEmpty)
               Expanded(
                 child: ListView(
                   children: [
-                    const Text("Crime Distribution (Pie Chart)",
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    const SizedBox(height: 12),
-                    SizedBox(height: 200, child: _buildPieChart()),
-                    const SizedBox(height: 24),
-                    const Text("Crime Trends (Bar Chart)",
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    const SizedBox(height: 12),
-                    SizedBox(height: 200, child: _buildBarChart()),
-                    const SizedBox(height: 24),
-                    const Text("Crime Density (Heatmap)",
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                    const SizedBox(height: 12),
-                    SizedBox(
+                    _buildCard(
+                      title: "Crime Distribution (Pie Chart)",
+                      height: 200,
+                      child: _buildPieChart(),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildCard(
+                      title: "Crime Trends (Bar Chart)",
+                      height: 200,
+                      child: _buildBarChart(),
+                    ),
+                    const SizedBox(height: 16),
+                    _buildCard(
+                      title: "Crime Density (Heatmap)",
                       height: 300,
                       child: _buildHeatmap(),
                     ),
@@ -116,9 +116,44 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
                 ),
               )
             else if (selectedCity != null)
-              const Text("No data available for selected city."),
+              const Expanded(
+                child: Center(
+                  child: Text(
+                    "No data available for selected city.",
+                    style: TextStyle(fontSize: 16),
+                  ),
+                ),
+              ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildCard(
+      {required String title, required double height, required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.25),
+            blurRadius: 6,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title,
+              style:
+                  const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 10),
+          SizedBox(height: height, child: child),
+        ],
       ),
     );
   }
@@ -140,7 +175,8 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
             value: count.toDouble(),
             title: "$type\n$percentage%",
             radius: 60,
-            titleStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            titleStyle:
+                const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
           );
         }).toList(),
       ),
@@ -152,7 +188,6 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
       BarChartData(
         barGroups: crimeStats.entries.toList().asMap().entries.map((entry) {
           final index = entry.key;
-          final type = entry.value.key;
           final count = entry.value.value;
 
           return BarChartGroupData(
@@ -171,14 +206,19 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
-              getTitlesWidget: (double value, TitleMeta meta) {
+              getTitlesWidget: (value, meta) {
                 final index = value.toInt();
                 final keys = crimeStats.keys.toList();
-                return SideTitleWidget(
-                  meta: meta,
+
+                if (index < 0 || index >= keys.length)
+                  return const SizedBox.shrink();
+
+                return Padding(
+                  padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     keys[index],
                     style: const TextStyle(fontSize: 10),
+                    textAlign: TextAlign.center,
                   ),
                 );
               },
@@ -187,25 +227,24 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
           leftTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
-              getTitlesWidget: (double value, TitleMeta meta) {
-                if (value == value.floor()) {
-                  return Text(
-                    value.toInt().toString(),
-                    style: const TextStyle(fontSize: 10),
+              reservedSize: 30,
+              interval: 1,
+              getTitlesWidget: (value, meta) {
+                if (value == value.floorToDouble()) {
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: Text(
+                      value.toInt().toString(),
+                      style: const TextStyle(fontSize: 10),
+                    ),
                   );
                 }
-                return const Text('');
+                return const SizedBox.shrink();
               },
-              interval: 1,
-              reservedSize: 40,
             ),
           ),
-          rightTitles: AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
-          topTitles: AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
-          ),
+          topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
         ),
         borderData: FlBorderData(show: false),
         gridData: FlGridData(show: true),
@@ -214,14 +253,12 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
   }
 
   Widget _buildHeatmap() {
-    // Define city coordinates
     final cityCoordinates = {
       'Lahore': LatLng(31.5204, 74.3587),
       'Islamabad': LatLng(33.6844, 73.0479),
       'Karachi': LatLng(24.8607, 67.0011),
     };
 
-    // Use the selected city's coordinates, default to Lahore if not found
     final center = cityCoordinates[selectedCity] ?? LatLng(31.5204, 74.3587);
 
     return FlutterMap(
@@ -231,8 +268,7 @@ class _CrimeStatisticsPageState extends State<CrimeStatisticsPage> {
       ),
       children: [
         TileLayer(
-          urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-          subdomains: ['a', 'b', 'c'],
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
         ),
         CircleLayer(
           circles: crimeLocations.map((location) {
