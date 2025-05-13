@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../widgets/dashboard_card.dart';
 import '../constants/colors.dart';
 import 'crime_statistics_page.dart';
+import 'map_screen.dart';
 
 class HomeDashboard extends StatelessWidget {
   const HomeDashboard({super.key});
@@ -30,6 +31,12 @@ class HomeDashboard extends StatelessWidget {
                 imagePath: "assets/images/map.jpg",
                 buttonText: "View Map",
                 onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) =>  MapScreen(),
+                    ),
+                  );
                   // TODO: Navigate to map screen
                 },
               ),
