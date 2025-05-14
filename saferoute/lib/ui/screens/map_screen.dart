@@ -8,9 +8,9 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   final MLService _mlService = MLService();
-  String result = "Prediction not made";
+  String result = "Loading model...";
   bool isLoading = false;
-  bool isModelLoaded = false;  // Flag to track if the model is loaded
+  bool isModelLoaded = false;
 
   @override
   void initState() {
@@ -18,17 +18,21 @@ class _MapScreenState extends State<MapScreen> {
     _loadModel();
   }
 
-  // Load the model when the screen is initialized
   Future<void> _loadModel() async {
-    await _mlService.loadModel();
-    setState(() {
-      isModelLoaded = true;  // Model has finished loading
-      result = "Model loaded successfully";
-    });
+    try {
+      await _mlService.loadModel();
+      setState(() {
+        isModelLoaded = true;
+        result = "Model loaded successfully. Ready for prediction.";
+      });
+    } catch (e) {
+      setState(() {
+        result = "Failed to load model: ${e.toString()}";
+      });
+    }
   }
 
-  // Run the prediction when the button is pressed
-  void _testPrediction() async {
+  Future<void> _testPrediction() async {
     if (!isModelLoaded) {
       setState(() {
         result = "Model is still loading. Please wait.";
@@ -38,24 +42,38 @@ class _MapScreenState extends State<MapScreen> {
 
     setState(() {
       isLoading = true;
-      result = "Predicting...";  // Display loading message
+      result = "Predicting...";
     });
 
-    // Example input data [start_lat, start_lng, end_lat, end_lng, time, day, count, severity, length, ...]
-    List<double> input = [31.5204, 74.3587, 31.5400, 74.3700, 2, 5, 14, 6.2, 3.4, 1];
+    try {
+      // Example input data with 11 features
+      List<double> input = [
+  31.4900, // start_lat
+  74.3000, // start_lng
+  31.5000, // end_lat
+  74.3200, // end_lng
+  0.0,     // time_of_day = Morning
+  1.0,     // day_of_week = Tuesday
+  0.0,     // city = Lahore
+  25.0,     // crime_count_nearby
+  2.0,     // avg_crime_severity
+  4.0,     // path_length_km
+  1.0      // path_id
+];
 
-    double score = await _mlService.predictSafetyScore(input);
 
-    setState(() {
-      isLoading = false;
-      if (score == -1.0) {
-        result = "Model not loaded. Please try again.";
-      } else if (score == -2.0) {
-        result = "Prediction failed.";
-      } else {
+      double score = await _mlService.predictSafetyScore(input);
+
+      setState(() {
+        isLoading = false;
         result = "Predicted Safety Score: ${score.toStringAsFixed(2)}";
-      }
-    });
+      });
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+        result = "Prediction failed: ${e.toString()}";
+      });
+    }
   }
 
   @override
@@ -66,22 +84,40 @@ class _MapScreenState extends State<MapScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Display loading spinner while prediction is in progress
-            if (isLoading) CircularProgressIndicator(),
+            if (isLoading) 
+              Column(
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text("Processing prediction...", style: TextStyle(fontSize: 16)),
+                ],
+              ),
 
-            // Display the prediction result
-            if (!isLoading) Text(result, style: TextStyle(fontSize: 18)),
+            if (!isLoading) 
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  result,
+                  style: TextStyle(fontSize: 18),
+                  textAlign: TextAlign.center,
+                ),
+              ),
 
             SizedBox(height: 20),
 
-            // Button to trigger prediction
             ElevatedButton(
-              onPressed: _testPrediction,
-              child: Text("Run ML Prediction"),
+              onPressed: isLoading ? null : _testPrediction,
+              child: Text(isLoading ? "Processing..." : "Run ML Prediction"),
             )
           ],
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _mlService.dispose();
+    super.dispose();
   }
 }
