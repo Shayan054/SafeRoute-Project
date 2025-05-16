@@ -46,4 +46,17 @@ class FirestoreService {
       return {};
     }
   }
+
+  Future<List<Map<String, dynamic>>> getAllCrimeLocations() async {
+    final snapshot = await _firestore.collection('firestore_crime').get();
+    return snapshot.docs.map((doc) {
+      final data = doc.data();
+      return {
+        'lat': data['latitude'],
+        'lng': data['longitude'],
+        'crime_type': data['crime_type'],
+        'city': data['city'],
+      };
+    }).toList();
+  }
 }
