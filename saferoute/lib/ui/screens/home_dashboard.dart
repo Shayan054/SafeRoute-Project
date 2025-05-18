@@ -3,6 +3,7 @@ import '../widgets/dashboard_card.dart';
 import '../constants/colors.dart';
 import 'crime_statistics_page.dart';
 import 'map_screen.dart';
+import 'crime_reporting_screen.dart';
 
 class HomeDashboard extends StatelessWidget {
   const HomeDashboard({super.key});
@@ -34,7 +35,7 @@ class HomeDashboard extends StatelessWidget {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) =>  MapScreen(),
+                      builder: (context) => MapScreen(),
                     ),
                   );
                   // TODO: Navigate to map screen
@@ -62,7 +63,12 @@ class HomeDashboard extends StatelessWidget {
                 imagePath: "assets/images/crime.jpg",
                 buttonText: "Report Now",
                 onPressed: () {
-                  // Navigate to report form
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const CrimeReportingScreen(),
+                    ),
+                  );
                 },
               ),
             ],
