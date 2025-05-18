@@ -40,10 +40,13 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
   final _crimeTypeFocusNode = FocusNode();
   int _currentStep = 0;
 
+  // Loading states - separate form submission from map operations
+  bool _isLoading = false; // Only for form submission
+  bool _isInitializing = true;
+  bool _isMapLoading = false; // New variable specifically for map operations
+
   // Map variables
   LatLng _center = LatLng(31.4900, 74.3000); // Default center
-  bool _isLoading = false;
-  bool _isInitializing = true;
   List<String> _cities = [
     "Lahore",
     "Islamabad",
@@ -161,22 +164,22 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
         }
       }
 
-      // Set loading state only for location retrieval, not entire screen
+      // Use the map-specific loading state
       setState(() {
-        _isLoading = true;
+        _isMapLoading = true;
       });
 
       Position position = await Geolocator.getCurrentPosition();
       if (mounted) {
         setState(() {
           _center = LatLng(position.latitude, position.longitude);
-          _isLoading = false;
+          _isMapLoading = false;
         });
         _mapController.move(_center, 15.0);
       }
     } catch (e) {
       setState(() {
-        _isLoading = false;
+        _isMapLoading = false;
       });
       print("Error getting location: $e");
       ScaffoldMessenger.of(context).showSnackBar(
@@ -375,20 +378,8 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
   }
 
   void _showLocationPicker() async {
-    // Show loading only in the modal, not affecting the entire screen
-    bool wasLoading = _isLoading;
-
-    // Get current location before showing map
-    await _getCurrentLocation();
-
-    if (!mounted) return;
-
-    // Restore previous loading state if needed
-    if (wasLoading != _isLoading) {
-      setState(() {
-        _isLoading = wasLoading;
-      });
-    }
+    // Don't change the main loading state
+    // We'll use the map-specific loading state inside the modal
 
     // Check if we have a valid Mapbox token
     if (_mapboxToken == null || _mapboxToken!.isEmpty) {
@@ -407,6 +398,25 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
       builder: (context) {
         return StatefulBuilder(
           builder: (context, setModalState) {
+            // Get location after the modal is shown
+            Future.delayed(const Duration(milliseconds: 300), () {
+              if (context.mounted) {
+                // Set loading state within the modal's context
+                setModalState(() {
+                  _isMapLoading = true;
+                });
+
+                // Get current location
+                _getCurrentLocation().then((_) {
+                  if (context.mounted) {
+                    setModalState(() {
+                      // _isMapLoading is already updated in _getCurrentLocation
+                    });
+                  }
+                });
+              }
+            });
+
             return Container(
               height: MediaQuery.of(context).size.height * 0.8,
               decoration: const BoxDecoration(
@@ -685,13 +695,24 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
                             elevation: 4,
                             child: const Icon(Icons.my_location),
                             onPressed: () {
-                              _getCurrentLocation();
+                              // Use getCurrentLocation but update the modal state
+                              setModalState(() {
+                                _isMapLoading = true;
+                              });
+
+                              _getCurrentLocation().then((_) {
+                                if (context.mounted) {
+                                  setModalState(() {
+                                    // _isMapLoading is already set to false in _getCurrentLocation
+                                  });
+                                }
+                              });
                             },
                           ),
                         ),
 
-                        // Loading indicator
-                        if (_isLoading)
+                        // Loading indicator (only inside the map modal)
+                        if (_isMapLoading)
                           Positioned.fill(
                             child: Container(
                               color: Colors.black.withOpacity(0.3),
