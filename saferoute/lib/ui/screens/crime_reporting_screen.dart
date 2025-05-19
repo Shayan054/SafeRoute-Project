@@ -65,6 +65,8 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
     super.initState();
     _initializeScreen();
     _setupFocusListeners();
+    // Pre-initialize map controller
+    _preloadMapResources();
   }
 
   void _setupFocusListeners() {
@@ -377,46 +379,25 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
     }
   }
 
-  void _showLocationPicker() async {
-    // Don't change the main loading state
-    // We'll use the map-specific loading state inside the modal
+  Future<void> _preloadMapResources() async {
+    if (_mapboxToken == null || _mapboxToken!.isEmpty) return;
+    
+    // Pre-initialize map controller with initial view
+    _mapController.move(_center, 13.0);
+    
+    // Cache initial view
+    await Future.delayed(const Duration(milliseconds: 100));
+    _mapController.move(_center, 13.0);
+  }
 
-    // Check if we have a valid Mapbox token
-    if (_mapboxToken == null || _mapboxToken!.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content:
-                Text('Map service not available. Please try again later.')),
-      );
-      return;
-    }
-
+  void _showLocationPicker() {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) {
         return StatefulBuilder(
-          builder: (context, setModalState) {
-            // Get location after the modal is shown
-            Future.delayed(const Duration(milliseconds: 300), () {
-              if (context.mounted) {
-                // Set loading state within the modal's context
-                setModalState(() {
-                  _isMapLoading = true;
-                });
-
-                // Get current location
-                _getCurrentLocation().then((_) {
-                  if (context.mounted) {
-                    setModalState(() {
-                      // _isMapLoading is already updated in _getCurrentLocation
-                    });
-                  }
-                });
-              }
-            });
-
+          builder: (context, setState) {
             return Container(
               height: MediaQuery.of(context).size.height * 0.8,
               decoration: const BoxDecoration(
@@ -438,8 +419,7 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
                 children: [
                   // Header
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 20, vertical: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                     decoration: BoxDecoration(
                       color: AppColors.primary,
                       borderRadius: const BorderRadius.only(
@@ -448,23 +428,24 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
                       ),
                     ),
                     child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         const Text(
-                          'Select Location',
+                          "Select Location",
                           style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold),
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
+                        const Spacer(),
                         IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white),
-                            onPressed: () {
-                              setModalState(() {
-                                _searchSuggestions = [];
-                              });
-                              Navigator.pop(context);
-                            }),
+                          icon: const Icon(Icons.my_location, color: Colors.white),
+                          onPressed: () async {
+                            setState(() => _isMapLoading = true);
+                            await _getCurrentLocation();
+                            setState(() => _isMapLoading = false);
+                          },
+                        ),
                       ],
                     ),
                   ),
@@ -509,58 +490,29 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
                                 vertical: 16,
                                 horizontal: 20,
                               ),
-                              suffixIcon: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (_isSearching)
-                                    Container(
-                                      width: 24,
-                                      height: 24,
-                                      padding: const EdgeInsets.all(4.0),
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor:
-                                            AlwaysStoppedAnimation<Color>(
-                                          AppColors.primary,
-                                        ),
-                                      ),
-                                    ),
-                                  IconButton(
-                                    icon: Icon(
-                                      Icons.clear,
-                                      color: Colors.grey[400],
-                                    ),
-                                    onPressed: () {
-                                      _searchController.clear();
-                                      setModalState(() {
-                                        _searchSuggestions = [];
-                                      });
-                                    },
-                                  ),
-                                ],
-                              ),
                             ),
                             onChanged: (value) {
-                              _getSearchSuggestions(value).then((_) {
-                                setModalState(() {});
-                              });
-                            },
-                            onSubmitted: (value) {
-                              if (_searchSuggestions.isNotEmpty) {
-                                _selectSuggestion(_searchSuggestions[0]);
+                              if (value.isEmpty) {
+                                setState(() {
+                                  _searchSuggestions = [];
+                                  _isSearching = false;
+                                });
                               } else {
-                                _searchLocation(value);
+                                _getSearchSuggestions(value);
                               }
-                              setModalState(() {
-                                _searchSuggestions = [];
-                              });
                             },
                           ),
                         ),
-
-                        // Suggestions list
+                        if (_isSearching)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 8.0),
+                            child: Center(
+                              child: CircularProgressIndicator(),
+                            ),
+                          ),
                         if (_searchSuggestions.isNotEmpty)
                           Container(
+                            margin: const EdgeInsets.only(top: 8),
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(12),
@@ -572,35 +524,24 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
                                 ),
                               ],
                             ),
-                            margin: const EdgeInsets.only(top: 8),
-                            child: ListView.separated(
+                            child: ListView.builder(
                               shrinkWrap: true,
+                              padding: EdgeInsets.zero,
                               itemCount: _searchSuggestions.length,
-                              separatorBuilder: (context, index) => Divider(
-                                height: 1,
-                                color: Colors.grey[200],
-                              ),
                               itemBuilder: (context, index) {
+                                final suggestion = _searchSuggestions[index];
                                 return ListTile(
-                                  title: Text(
-                                    _searchSuggestions[index]['name'],
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  leading: Icon(
-                                    Icons.location_on,
-                                    color: AppColors.primary,
-                                  ),
-                                  dense: true,
+                                  title: Text(suggestion['place_name'] ?? ''),
                                   onTap: () {
-                                    _selectSuggestion(
-                                        _searchSuggestions[index]);
-                                    setModalState(() {
-                                      _searchSuggestions = [];
+                                    final coordinates = suggestion['center'] as List<dynamic>;
+                                    final lat = coordinates[1] as double;
+                                    final lng = coordinates[0] as double;
+                                    setState(() {
+                                      _selectedLocation = LatLng(lat, lng);
+                                      _mapController.move(_selectedLocation!, 15.0);
                                     });
+                                    _searchController.clear();
+                                    _searchSuggestions = [];
                                   },
                                 );
                               },
@@ -618,20 +559,26 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
                           mapController: _mapController,
                           options: MapOptions(
                             initialCenter: _center,
-                            initialZoom: 15.0,
+                            initialZoom: 13.0,
                             onTap: (tapPosition, point) {
-                              setModalState(() {
+                              setState(() {
                                 _selectedLocation = point;
                               });
                             },
+                            keepAlive: true,
                           ),
                           children: [
                             TileLayer(
-                              urlTemplate:
-                                  'https://api.mapbox.com/styles/v1/mapbox/streets-v11/tiles/256/{z}/{x}/{y}@2x?access_token={accessToken}',
+                              urlTemplate: 'https://api.mapbox.com/styles/v1/mapbox/dark-v10/tiles/256/{z}/{x}/{y}@2x?access_token={accessToken}',
                               additionalOptions: {
                                 'accessToken': _mapboxToken ?? '',
                               },
+                              tileProvider: NetworkTileProvider(),
+                              tileBuilder: (context, tileWidget, tile) {
+                                return tileWidget;
+                              },
+                              maxZoom: 18,
+                              minZoom: 5,
                             ),
                             MarkerLayer(
                               markers: [
@@ -654,8 +601,7 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
                                             ),
                                             boxShadow: [
                                               BoxShadow(
-                                                color: Colors.black
-                                                    .withOpacity(0.2),
+                                                color: Colors.black.withOpacity(0.2),
                                                 blurRadius: 6,
                                                 offset: const Offset(0, 3),
                                               ),
@@ -667,14 +613,6 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
                                           height: 10,
                                           color: AppColors.primary,
                                         ),
-                                        Container(
-                                          width: 8,
-                                          height: 8,
-                                          decoration: BoxDecoration(
-                                            color: AppColors.primary,
-                                            shape: BoxShape.circle,
-                                          ),
-                                        ),
                                       ],
                                     ),
                                   ),
@@ -682,36 +620,6 @@ class _CrimeReportingScreenState extends State<CrimeReportingScreen> {
                             ),
                           ],
                         ),
-
-                        // My location button
-                        Positioned(
-                          right: 16,
-                          bottom: 100,
-                          child: FloatingActionButton(
-                            heroTag: "locationBtn",
-                            mini: true,
-                            backgroundColor: Colors.white,
-                            foregroundColor: AppColors.primary,
-                            elevation: 4,
-                            child: const Icon(Icons.my_location),
-                            onPressed: () {
-                              // Use getCurrentLocation but update the modal state
-                              setModalState(() {
-                                _isMapLoading = true;
-                              });
-
-                              _getCurrentLocation().then((_) {
-                                if (context.mounted) {
-                                  setModalState(() {
-                                    // _isMapLoading is already set to false in _getCurrentLocation
-                                  });
-                                }
-                              });
-                            },
-                          ),
-                        ),
-
-                        // Loading indicator (only inside the map modal)
                         if (_isMapLoading)
                           Positioned.fill(
                             child: Container(

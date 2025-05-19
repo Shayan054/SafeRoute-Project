@@ -75,12 +75,13 @@ class _MapScreenState extends State<MapScreen> {
 
   Future<void> _loadCrimeData() async {
     try {
-      // Load all crime locations, not just for Lahore
       _crimeLocations = await _firestoreService.getAllCrimeLocations();
       _crimeStats = {};
       _updateCrimeVisualization();
     } catch (e) {
-      print("Error loading crime data: $e");
+      setState(() {
+        result = "Failed to load crime data";
+      });
     }
   }
 
@@ -94,8 +95,16 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     // Create markers for individual crimes
-    List<CircleMarker> crimeMarkers = [];
+    final crimeMarkers = <CircleMarker>[];
+    final hotspotMarkers = <CircleMarker>[];
+    final crimeDensity = <String, int>{};
+
+    // Calculate crime density in 100m x 100m grid cells
+    const double gridSize = 0.001; // approximately 100m
+    
+    // Process all crimes in a single pass
     for (var crime in _crimeLocations) {
+      // Add individual crime marker
       crimeMarkers.add(
         CircleMarker(
           point: latlong.LatLng(crime['lat'], crime['lng']),
@@ -105,19 +114,10 @@ class _MapScreenState extends State<MapScreen> {
           borderStrokeWidth: 2,
         ),
       );
-    }
 
-    // Create hotspot markers (areas with high crime density)
-    List<CircleMarker> hotspotMarkers = [];
-    Map<String, int> crimeDensity = {};
-
-    // Calculate crime density in 100m x 100m grid cells
-    const double gridSize = 0.001; // approximately 100m
-    for (var crime in _crimeLocations) {
+      // Update crime density
       double lat = crime['lat'];
       double lng = crime['lng'];
-
-      // Round to nearest grid cell
       String cellKey = '${(lat / gridSize).round()},${(lng / gridSize).round()}';
       crimeDensity[cellKey] = (crimeDensity[cellKey] ?? 0) + 1;
     }
@@ -129,14 +129,13 @@ class _MapScreenState extends State<MapScreen> {
         double lat = double.parse(coords[0]) * gridSize;
         double lng = double.parse(coords[1]) * gridSize;
 
-        // Calculate color intensity based on crime count
-        double intensity = min(count / 5.0, 1.0); // Normalize to 0-1
-        Color hotspotColor = Colors.purple.withOpacity(0.5 * intensity); // Changed to purple
+        double intensity = min(count / 5.0, 1.0);
+        Color hotspotColor = Colors.purple.withOpacity(0.5 * intensity);
 
         hotspotMarkers.add(
           CircleMarker(
             point: latlong.LatLng(lat, lng),
-            radius: 50, // 50m radius
+            radius: 50,
             color: hotspotColor,
             borderColor: Colors.transparent,
           ),
@@ -172,43 +171,46 @@ class _MapScreenState extends State<MapScreen> {
       }
 
       Position position = await Geolocator.getCurrentPosition();
+      final newCenter = latlong.LatLng(position.latitude, position.longitude);
+      
       setState(() {
         _currentPosition = position;
-        _center = latlong.LatLng(position.latitude, position.longitude);
+        _center = newCenter;
       });
-      _mapController.move(latlong.LatLng(position.latitude, position.longitude), 15.0);
+      
+      _mapController.move(newCenter, 15.0);
     } catch (e) {
       setState(() {
-        result = "Error getting location: ${e.toString()}";
+        result = "Error getting location";
       });
     }
   }
 
-   void _handleMapTap(tapPosition, latlong.LatLng tappedPoint) {
-    setState(() {
-      if (_sourceLocation == null) {
+  void _handleMapTap(tapPosition, latlong.LatLng tappedPoint) {
+    if (_sourceLocation == null) {
+      setState(() {
         _sourceLocation = tappedPoint;
-        // Optionally update source text field with coordinates or reverse geocode
         _sourceController.text = "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
-      } else if (_destinationLocation == null) {
+      });
+    } else if (_destinationLocation == null) {
+      setState(() {
         _destinationLocation = tappedPoint;
-         // Optionally update destination text field
         _destinationController.text = "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
-        _findRoutes(); // Find routes when both are set
-      } else {
-        // Reset if both are already set
+      });
+      _findRoutes(); // Find routes when both are set
+    } else {
+      setState(() {
         _sourceLocation = tappedPoint;
         _destinationLocation = null;
         _routePoints = [];
         _alternativeRoutes = [];
-        _selectedRouteIndex = 0; // Reset selected route index
+        _selectedRouteIndex = 0;
         _sourceController.text = "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
         _destinationController.clear();
-      }
-       _mapController.move(tappedPoint, _mapController.camera.zoom); // Move map to tapped location
-    });
+      });
+    }
+    _mapController.move(tappedPoint, _mapController.camera.zoom);
   }
-
 
   Future<void> _searchLocation(String query, {bool isSource = true}) async {
     if (query.isEmpty) return;
@@ -398,13 +400,7 @@ class _MapScreenState extends State<MapScreen> {
       setState(() {
         isEnvLoaded = true;
       });
-      print('Environment loaded successfully');
-      final token = dotenv.env['MAPBOX_TOKEN'] ?? '';
-      print('Mapbox Token length: ${token.length}');
-      print('Mapbox Token first 10 chars: ${token.substring(0, min(10, token.length))}');
-      print('Mapbox Token last 10 chars: ${token.substring(max(0, token.length - 10))}');
     } catch (e) {
-      print('Error loading environment: $e');
       setState(() {
         result = "Failed to load environment variables: ${e.toString()}";
       });
@@ -479,18 +475,16 @@ class _MapScreenState extends State<MapScreen> {
     // Determine the currently selected route for details display
     final selectedRoute = _alternativeRoutes.isNotEmpty ? _alternativeRoutes[_selectedRouteIndex] : null;
 
-
     return Scaffold(
-      // AppBar will be adjusted or removed based on final design
       appBar: AppBar(
         title: Text("SafeRoute Map"),
-        backgroundColor: Colors.black87, // Dark theme AppBar
-        foregroundColor: Colors.white, // White text for AppBar
+        backgroundColor: Colors.black87,
+        foregroundColor: Colors.white,
         actions: [
           IconButton(
             icon: Icon(
               _showCrimeHotspots ? Icons.layers : Icons.layers_clear,
-              color: _showCrimeHotspots ? Colors.purpleAccent : Colors.grey, // Purple accent
+              color: _showCrimeHotspots ? Colors.purpleAccent : Colors.grey,
             ),
             onPressed: () {
               setState(() {
@@ -502,7 +496,7 @@ class _MapScreenState extends State<MapScreen> {
           ),
         ],
       ),
-      extendBodyBehindAppBar: true, // Extend map behind AppBar
+      extendBodyBehindAppBar: true,
       body: Stack(
         children: [
           // Map Layer
@@ -511,62 +505,65 @@ class _MapScreenState extends State<MapScreen> {
             options: MapOptions(
               initialCenter: _center,
               initialZoom: 13.0,
-              onTap: _handleMapTap, // Re-enabled map tapping with corrected signature
+              onTap: _handleMapTap,
+              keepAlive: true, // Keep map alive when not visible
             ),
             children: [
               TileLayer(
-                // Using a dark map style URL if available or a general one
                 urlTemplate: 'https://api.mapbox.com/styles/v1/mapbox/dark-v10/tiles/256/{z}/{x}/{y}@2x?access_token={accessToken}',
                 additionalOptions: {
                   'accessToken': mapboxToken,
                 },
+                tileProvider: NetworkTileProvider(),
+                tileBuilder: (context, tileWidget, tile) {
+                  return tileWidget;
+                },
               ),
-              // Crime Hotspot Circles (color already changed to purple)
+              // Crime Hotspot Circles
               CircleLayer(
                 circles: _hotspotMarkers,
               ),
               CircleLayer(
                 circles: _crimeMarkers,
               ),
-              // Route Polylines (Display all alternative routes)
+              // Route Polylines
               PolylineLayer(
                 polylines: [
                   if (_alternativeRoutes.isNotEmpty)
                     ..._alternativeRoutes.asMap().entries.map((entry) {
                       final index = entry.key;
                       final route = entry.value;
-                      // Highlight the selected route, others are less prominent
                       return Polyline(
                         points: route['points'],
-                        color: index == _selectedRouteIndex ? Colors.purpleAccent : Colors.blueGrey.withOpacity(0.6), // Purple for selected route, different color for others
-                        strokeWidth: index == _selectedRouteIndex ? 5.0 : 3.0, // Thicker for selected route
+                        color: index == _selectedRouteIndex ? Colors.purpleAccent : Colors.blueGrey.withOpacity(0.6),
+                        strokeWidth: index == _selectedRouteIndex ? 5.0 : 3.0,
                       );
                     }).toList(),
                 ],
               ),
-              // Location Markers (Current, Source, Destination)
+              // Location Markers
               MarkerLayer(
                 markers: [
-                  if (_currentPosition != null) // Display current location marker
+                  if (_currentPosition != null)
                     Marker(
                       point: latlong.LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
                       width: 40,
                       height: 40,
-                      child: Icon(Icons.directions_car, color: Colors.white, size: 30), // Car icon, white
+                      child: Icon(Icons.directions_car, color: Colors.white, size: 30),
                     ),
                   if (_sourceLocation != null)
                     Marker(
                       point: _sourceLocation!,
                       width: 40,
                       height: 40,
-                      child: Icon(Icons.my_location, color: Colors.greenAccent, size: 30), // Source marker icon changed
+                      child: Icon(Icons.my_location, color: Colors.greenAccent, size: 30),
                     ),
                   if (_destinationLocation != null)
                     Marker(
                       point: _destinationLocation!,
                       width: 40,
                       height: 40,
-                      child: Icon(Icons.location_on, color: Colors.purpleAccent, size: 30), // Destination marker (purple)
+                      child: Icon(Icons.location_on, color: Colors.purpleAccent, size: 30),
                     ),
                 ],
               ),
@@ -575,12 +572,12 @@ class _MapScreenState extends State<MapScreen> {
 
           // Current Location Button
           Positioned(
-            top: MediaQuery.of(context).padding.top + kToolbarHeight + 16, // Position below AppBar
+            top: MediaQuery.of(context).padding.top + kToolbarHeight + 16,
             right: 16,
             child: FloatingActionButton(
-              onPressed: _getCurrentLocation, // Button calls the function to get and move to current location
-              child: Icon(Icons.my_location, color: Colors.purple), // Purple icon
-              backgroundColor: Colors.white, // White background
+              onPressed: _getCurrentLocation,
+              child: Icon(Icons.my_location, color: Colors.purple),
+              backgroundColor: Colors.white,
             ),
           ),
 
@@ -592,7 +589,7 @@ class _MapScreenState extends State<MapScreen> {
             child: Container(
               padding: EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.black87, // Dark background
+                color: Colors.black87,
                 borderRadius: BorderRadius.only(
                   topLeft: Radius.circular(20),
                   topRight: Radius.circular(20),
@@ -609,18 +606,18 @@ class _MapScreenState extends State<MapScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (_alternativeRoutes.isEmpty) // Pre-navigation state: Search bars
+                  if (_alternativeRoutes.isEmpty)
                     Column(
                       children: [
-                         TextField(
+                        TextField(
                           controller: _sourceController,
-                          style: TextStyle(color: Colors.white), // White text
+                          style: TextStyle(color: Colors.white),
                           decoration: InputDecoration(
                             hintText: 'Enter Starting Point',
-                            hintStyle: TextStyle(color: Colors.white70), // Lighter hint text
-                            prefixIcon: Icon(Icons.my_location, color: Colors.greenAccent), // Source icon
+                            hintStyle: TextStyle(color: Colors.white70),
+                            prefixIcon: Icon(Icons.my_location, color: Colors.greenAccent),
                             filled: true,
-                            fillColor: Colors.white12, // Subtle fill color
+                            fillColor: Colors.white12,
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(10),
                               borderSide: BorderSide.none,
@@ -631,13 +628,13 @@ class _MapScreenState extends State<MapScreen> {
                         SizedBox(height: 16),
                         TextField(
                           controller: _destinationController,
-                          style: TextStyle(color: Colors.white), // White text
+                          style: TextStyle(color: Colors.white),
                           decoration: InputDecoration(
                             hintText: 'Enter Destination',
-                            hintStyle: TextStyle(color: Colors.white70), // Lighter hint text
-                            prefixIcon: Icon(Icons.location_on, color: Colors.purpleAccent), // Destination icon
+                            hintStyle: TextStyle(color: Colors.white70),
+                            prefixIcon: Icon(Icons.location_on, color: Colors.purpleAccent),
                             filled: true,
-                            fillColor: Colors.white12, // Subtle fill color
+                            fillColor: Colors.white12,
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(10),
                               borderSide: BorderSide.none,
@@ -646,157 +643,152 @@ class _MapScreenState extends State<MapScreen> {
                           onSubmitted: (query) => _searchLocation(query, isSource: false),
                         ),
                         SizedBox(height: 16),
-                         if (isLoading) CircularProgressIndicator(color: Colors.purpleAccent),
-                         if (!isLoading && (_sourceLocation != null || _destinationLocation != null) && !result.contains("Model loaded successfully")) // Show message if locations selected but no route yet and not the model success message
-                           Padding(
+                        if (isLoading) CircularProgressIndicator(color: Colors.purpleAccent),
+                        if (!isLoading && (_sourceLocation != null || _destinationLocation != null) && !result.contains("Model loaded successfully"))
+                          Padding(
                             padding: const EdgeInsets.only(top: 8.0),
                             child: Text(
-                              result, // Displays status messages
+                              result,
                               style: TextStyle(color: Colors.white70),
                             ),
                           ),
                       ],
                     )
-                  else // Post-navigation state: Route details and alternatives
+                  else
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Selected Route Details
-                        if (selectedRoute != null) // Show details of the selected route
-                           Column(
-                             crossAxisAlignment: CrossAxisAlignment.start,
-                             children: [
-                               Text(
-                                 "${(selectedRoute['duration'] / 60).round()} min (${(selectedRoute['distance'] / 1000).toStringAsFixed(1)} km)",
-                                 style: TextStyle(
-                                   fontSize: 24,
-                                   fontWeight: FontWeight.bold,
-                                   color: Colors.white,
-                                 ),
-                               ),
-                               SizedBox(height: 4),
-                               Text(
-                                 "Route ${_selectedRouteIndex + 1} - Safety Score: ${selectedRoute['safetyScore'].toStringAsFixed(2)}",
-                                 style: TextStyle(
-                                   fontSize: 16,
-                                   color: Colors.purpleAccent, // Highlight safety score
-                                 ),
-                               ),
-                               SizedBox(height: 16),
-                                // Safety Score Indicator (Pill shape)
-                                Align(
-                                  alignment: Alignment.center,
-                                  child: Container(
-                                     padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                     decoration: BoxDecoration(
-                                       color: Colors.purpleAccent,
-                                       borderRadius: BorderRadius.circular(20),
-                                     ),
-                                     child: Text(
-                                       "Safety: ${selectedRoute['safetyScore'].toStringAsFixed(2)}", // Display calculated safety score
-                                       style: TextStyle(
-                                         color: Colors.white,
-                                         fontWeight: FontWeight.bold,
-                                         fontSize: 18,
-                                       ),
-                                     ),
-                                   ),
+                        if (selectedRoute != null)
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                "${(selectedRoute['duration'] / 60).round()} min (${(selectedRoute['distance'] / 1000).toStringAsFixed(1)} km)",
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
                                 ),
-                                SizedBox(height: 16),
-                                // Start and Destination display
-                                Row(
-                                  children: [
-                                    Column(
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                "Route ${_selectedRouteIndex + 1} - Safety Score: ${selectedRoute['safetyScore'].toStringAsFixed(2)}",
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: Colors.purpleAccent,
+                                ),
+                              ),
+                              SizedBox(height: 16),
+                              Align(
+                                alignment: Alignment.center,
+                                child: Container(
+                                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.purpleAccent,
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    "Safety: ${selectedRoute['safetyScore'].toStringAsFixed(2)}",
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 18,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              SizedBox(height: 16),
+                              Row(
+                                children: [
+                                  Column(
+                                    children: [
+                                      Icon(Icons.my_location, color: Colors.greenAccent, size: 20),
+                                      SizedBox(height: 4),
+                                      Icon(Icons.more_vert, color: Colors.white70, size: 20),
+                                      SizedBox(height: 4),
+                                      Icon(Icons.location_on, color: Colors.purpleAccent, size: 20),
+                                    ],
+                                  ),
+                                  SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Icon(Icons.my_location, color: Colors.greenAccent, size: 20),
-                                        SizedBox(height: 4),
-                                        Icon(Icons.more_vert, color: Colors.white70, size: 20),
-                                        SizedBox(height: 4),
-                                        Icon(Icons.location_on, color: Colors.purpleAccent, size: 20),
+                                        Text(
+                                          _sourceController.text.isNotEmpty ? _sourceController.text : "Starting Point",
+                                          style: TextStyle(color: Colors.white, fontSize: 16),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        SizedBox(height: 12),
+                                        Text(
+                                          _destinationController.text.isNotEmpty ? _destinationController.text : "Destination",
+                                          style: TextStyle(color: Colors.white, fontSize: 16),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
                                       ],
                                     ),
-                                    SizedBox(width: 8),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                           Text(
-                                            _sourceController.text.isNotEmpty ? _sourceController.text : "Starting Point",
-                                            style: TextStyle(color: Colors.white, fontSize: 16),
-                                            overflow: TextOverflow.ellipsis,
-                                           ),
-                                           SizedBox(height: 12),
-                                           Text(
-                                            _destinationController.text.isNotEmpty ? _destinationController.text : "Destination",
-                                            style: TextStyle(color: Colors.white, fontSize: 16),
-                                            overflow: TextOverflow.ellipsis,
-                                           ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                             ],
-                           ),
-                         SizedBox(height: 16),
-                         // Horizontal List of Alternative Routes
-                         Container(
-                           height: 100, // Give a fixed height for the horizontal list
-                           child: ListView.builder(
-                             scrollDirection: Axis.horizontal,
-                             itemCount: _alternativeRoutes.length,
-                             itemBuilder: (context, index) {
-                               final route = _alternativeRoutes[index];
-                               // Highlight the selected route card
-                               final isSelected = index == _selectedRouteIndex;
-                               return GestureDetector(
-                                 onTap: () => _selectRoute(index), // Select route on tap
-                                 child: Card(
-                                   color: isSelected ? Colors.purple.withOpacity(0.8) : Colors.black54, // Highlight selected card
-                                   shape: RoundedRectangleBorder(
-                                     borderRadius: BorderRadius.circular(10),
-                                     side: isSelected ? BorderSide(color: Colors.purpleAccent, width: 2) : BorderSide.none, // Add border to selected
-                                   ),
-                                   child: Container(
-                                     width: 180, // Fixed width for each route option card
-                                     padding: EdgeInsets.all(12),
-                                     child: Column(
-                                       mainAxisSize: MainAxisSize.min,
-                                       crossAxisAlignment: CrossAxisAlignment.start,
-                                       children: [
-                                         Text(
-                                           "Route ${index + 1}",
-                                           style: TextStyle(
-                                             fontWeight: FontWeight.bold,
-                                             fontSize: 16,
-                                             color: isSelected ? Colors.white : Colors.white70,
-                                           ),
-                                         ),
-                                         SizedBox(height: 4),
-                                         Text(
-                                           "${(route['duration'] / 60).round()} min | ${(route['distance'] / 1000).toStringAsFixed(1)} km",
-                                           style: TextStyle(
-                                             fontSize: 14,
-                                             color: isSelected ? Colors.white70 : Colors.white54,
-                                           ),
-                                         ),
-                                         SizedBox(height: 4),
-                                          Text(
-                                            "Safety: ${route['safetyScore'].toStringAsFixed(2)}",
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              color: Colors.greenAccent, // Safety score color
-                                               fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                            ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        SizedBox(height: 16),
+                        Container(
+                          height: 100,
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: _alternativeRoutes.length,
+                            itemBuilder: (context, index) {
+                              final route = _alternativeRoutes[index];
+                              final isSelected = index == _selectedRouteIndex;
+                              return GestureDetector(
+                                onTap: () => _selectRoute(index),
+                                child: Card(
+                                  color: isSelected ? Colors.purple.withOpacity(0.8) : Colors.black54,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    side: isSelected ? BorderSide(color: Colors.purpleAccent, width: 2) : BorderSide.none,
+                                  ),
+                                  child: Container(
+                                    width: 180,
+                                    padding: EdgeInsets.all(12),
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          "Route ${index + 1}",
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 16,
+                                            color: isSelected ? Colors.white : Colors.white70,
                                           ),
-                                       ],
-                                     ),
-                                   ),
-                                 ),
-                               );
-                             },
-                           ),
-                         ),
+                                        ),
+                                        SizedBox(height: 4),
+                                        Text(
+                                          "${(route['duration'] / 60).round()} min | ${(route['distance'] / 1000).toStringAsFixed(1)} km",
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: isSelected ? Colors.white70 : Colors.white54,
+                                          ),
+                                        ),
+                                        SizedBox(height: 4),
+                                        Text(
+                                          "Safety: ${route['safetyScore'].toStringAsFixed(2)}",
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            color: Colors.greenAccent,
+                                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
                       ],
                     ),
                 ],
