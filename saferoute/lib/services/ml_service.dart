@@ -12,7 +12,7 @@ class MLServiceException implements Exception {
 
 class MLService {
   static final MLService _instance = MLService._internal();
-  factory MLService() => _instance;
+  factory MLService() => _instance; //ye return krta eisting object
   MLService._internal();
 
   Interpreter? _interpreter;

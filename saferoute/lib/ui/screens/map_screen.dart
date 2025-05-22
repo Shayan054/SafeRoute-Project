@@ -5,6 +5,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'dart:math';
 import '../../services/ml_service.dart';
 import '../../services/firestore_service.dart';
+import '../../services/navigation_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -18,6 +19,7 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> {
   final MLService _mlService = MLService();
   final FirestoreService _firestoreService = FirestoreService();
+  final NavigationService _navigationService = NavigationService();
   final TextEditingController _searchController = TextEditingController(); // Keep for now, might refactor
   final TextEditingController _sourceController = TextEditingController();
   final TextEditingController _destinationController = TextEditingController();
@@ -25,6 +27,7 @@ class _MapScreenState extends State<MapScreen> {
   bool isLoading = false;
   bool isModelLoaded = false;
   bool isEnvLoaded = false;
+  bool isNavigating = false;
   final MapController _mapController = MapController();
   latlong.LatLng _center = latlong.LatLng(31.4900, 74.3000);
   List<latlong.LatLng> _routePoints = [];
@@ -85,7 +88,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  void _updateCrimeVisualization() {
+  void _updateCrimeVisualization() { //agr user off krdy ga to crime circle erase ho jay gy
     if (!_showCrimeHotspots) {
       setState(() {
         _crimeMarkers = [];
@@ -95,7 +98,7 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     // Create markers for individual crimes
-    final crimeMarkers = <CircleMarker>[];
+    final crimeMarkers = <CircleMarker>[]; 
     final hotspotMarkers = <CircleMarker>[];
     final crimeDensity = <String, int>{};
 
@@ -292,6 +295,7 @@ class _MapScreenState extends State<MapScreen> {
     setState(() {
       isLoading = true;
       result = "Finding routes...";
+      _selectedRouteIndex = -1; // Reset selection while loading
     });
 
     try {
@@ -336,17 +340,29 @@ class _MapScreenState extends State<MapScreen> {
         _alternativeRoutes.sort((a, b) => b['safetyScore'].compareTo(a['safetyScore']));
 
         setState(() {
-          _routePoints = _alternativeRoutes[_selectedRouteIndex]['points'];
+          if (_alternativeRoutes.isNotEmpty) {
+            _selectedRouteIndex = 0; // Initialize to the first (safest) route
+            _routePoints = _alternativeRoutes[0]['points'];
+            print('Routes found. Initial route index set to: $_selectedRouteIndex');
+          } else {
+            _selectedRouteIndex = -1;
+            _routePoints = [];
+            print('No routes found. Route index reset to: $_selectedRouteIndex');
+          }
           result = "Found ${_alternativeRoutes.length} routes. Safety scores calculated.";
         });
       } else {
          setState(() {
            result = "Error finding routes: ${response.statusCode}";
+           _selectedRouteIndex = -1;
+           _routePoints = [];
          });
       }
     } catch (e) {
       setState(() {
         result = "Error finding routes: ${e.toString()}";
+        _selectedRouteIndex = -1;
+        _routePoints = [];
       });
     } finally {
       setState(() {
@@ -422,27 +438,74 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _selectRoute(int index) {
+    print('Selecting route at index: $index');
+    print('Number of alternative routes: ${_alternativeRoutes.length}');
+    
     setState(() {
       _selectedRouteIndex = index;
       _routePoints = _alternativeRoutes[index]['points'];
-       // Optionally move the map to center the selected route
-       if (_routePoints.isNotEmpty) {
-         final bounds = LatLngBounds.fromPoints(_routePoints);
-         _mapController.fitCamera(
-           CameraFit.bounds(
-             bounds: bounds,
-             padding: EdgeInsets.only(
-                top: MediaQuery.of(context).padding.top + kToolbarHeight + 100, // Adjust padding
-                bottom: 306, // Adjust padding further to fix overflow
-                left: 50,
-                right: 50,
-             ),
-           ),
-         );
-       }
+      print('Selected route index set to: $_selectedRouteIndex');
+      print('Route points length: ${_routePoints.length}');
+      
+      // Optionally move the map to center the selected route
+      if (_routePoints.isNotEmpty) {
+        final bounds = LatLngBounds.fromPoints(_routePoints);
+        _mapController.fitCamera(
+          CameraFit.bounds(
+            bounds: bounds,
+            padding: EdgeInsets.only(
+              top: MediaQuery.of(context).padding.top + kToolbarHeight + 100,
+              bottom: 306,
+              left: 50,
+              right: 50,
+            ),
+          ),
+        );
+      }
     });
   }
 
+  void _startNavigation() {
+    print('Starting navigation...');
+    print('Alternative routes length: ${_alternativeRoutes.length}');
+    print('Selected route index: $_selectedRouteIndex');
+    
+    if (_alternativeRoutes.isEmpty) {
+      print('No routes available');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No routes available')),
+      );
+      return;
+    }
+
+    if (_selectedRouteIndex < 0 || _selectedRouteIndex >= _alternativeRoutes.length) {
+      print('Invalid route index: $_selectedRouteIndex');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please select a route first')),
+      );
+      return;
+    }
+
+    print('Starting navigation with route at index: $_selectedRouteIndex');
+    final selectedRoute = _alternativeRoutes[_selectedRouteIndex];
+    print('Selected route data: $selectedRoute');
+
+    _navigationService.startNavigation(
+      selectedRoute,
+      _selectedRouteIndex,
+      _mapController,
+      context,
+    );
+
+    setState(() {
+      isNavigating = _navigationService.isNavigating;
+    });
+  }
+
+  void _stopNavigation() {
+    _navigationService.stopNavigation();
+    setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -481,6 +544,12 @@ class _MapScreenState extends State<MapScreen> {
         backgroundColor: Colors.black87,
         foregroundColor: Colors.white,
         actions: [
+          if (_navigationService.isNavigating)
+            IconButton(
+              icon: Icon(Icons.close, color: Colors.white),
+              onPressed: _stopNavigation,
+              tooltip: 'Stop Navigation',
+            ),
           IconButton(
             icon: Icon(
               _showCrimeHotspots ? Icons.layers : Icons.layers_clear,
@@ -506,7 +575,7 @@ class _MapScreenState extends State<MapScreen> {
               initialCenter: _center,
               initialZoom: 13.0,
               onTap: _handleMapTap,
-              keepAlive: true, // Keep map alive when not visible
+              keepAlive: true,
             ),
             children: [
               TileLayer(
@@ -519,14 +588,8 @@ class _MapScreenState extends State<MapScreen> {
                   return tileWidget;
                 },
               ),
-              // Crime Hotspot Circles
-              CircleLayer(
-                circles: _hotspotMarkers,
-              ),
-              CircleLayer(
-                circles: _crimeMarkers,
-              ),
-              // Route Polylines
+              CircleLayer(circles: _hotspotMarkers),
+              CircleLayer(circles: _crimeMarkers),
               PolylineLayer(
                 polylines: [
                   if (_alternativeRoutes.isNotEmpty)
@@ -541,7 +604,6 @@ class _MapScreenState extends State<MapScreen> {
                     }).toList(),
                 ],
               ),
-              // Location Markers
               MarkerLayer(
                 markers: [
                   if (_currentPosition != null)
@@ -795,8 +857,111 @@ class _MapScreenState extends State<MapScreen> {
               ),
             ),
           ),
+
+          // Start Navigation Button
+          if (_alternativeRoutes.isNotEmpty && !_navigationService.isNavigating)
+            Positioned(
+              bottom: 16,
+              left: 16,
+              right: 16,
+              child: ElevatedButton(
+                onPressed: _startNavigation,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.purpleAccent,
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                ),
+                child: Text(
+                  'Start Navigation',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+
+          // Navigation Info Panel
+          if (_navigationService.isNavigating)
+            Positioned(
+              bottom: 16,
+              left: 16,
+              right: 16,
+              child: Container(
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 10,
+                      offset: Offset(0, 5),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Navigation Active',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Following the safest route to your destination',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    ),
+                    SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        _buildNavigationInfo(
+                          Icons.timer,
+                          '${(_navigationService.getNavigationInfo()['duration'] / 60).round()} min',
+                        ),
+                        _buildNavigationInfo(
+                          Icons.straighten,
+                          '${(_navigationService.getNavigationInfo()['distance'] / 1000).toStringAsFixed(1)} km',
+                        ),
+                        _buildNavigationInfo(
+                          Icons.security,
+                          'Safety: ${_navigationService.getNavigationInfo()['safetyScore'].toStringAsFixed(2)}',
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
+    );
+  }
+
+  Widget _buildNavigationInfo(IconData icon, String text) {
+    return Column(
+      children: [
+        Icon(icon, color: Colors.purpleAccent, size: 24),
+        SizedBox(height: 4),
+        Text(
+          text,
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+          ),
+        ),
+      ],
     );
   }
 
