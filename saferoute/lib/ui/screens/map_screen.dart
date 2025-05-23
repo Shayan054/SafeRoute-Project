@@ -20,7 +20,8 @@ class _MapScreenState extends State<MapScreen> {
   final MLService _mlService = MLService();
   final FirestoreService _firestoreService = FirestoreService();
   final NavigationService _navigationService = NavigationService();
-  final TextEditingController _searchController = TextEditingController(); // Keep for now, might refactor
+  final TextEditingController _searchController =
+      TextEditingController(); // Keep for now, might refactor
   final TextEditingController _sourceController = TextEditingController();
   final TextEditingController _destinationController = TextEditingController();
   String result = "Loading model...";
@@ -49,6 +50,14 @@ class _MapScreenState extends State<MapScreen> {
   List<CircleMarker> _crimeMarkers = [];
   List<CircleMarker> _hotspotMarkers = [];
 
+  // New variables for search suggestions
+  List<Map<String, dynamic>> _sourceSuggestions = [];
+  List<Map<String, dynamic>> _destinationSuggestions = [];
+  bool _isSearchingSource = false;
+  bool _isSearchingDestination = false;
+  bool _showSourceSuggestions = false;
+  bool _showDestinationSuggestions = false;
+
   // Crime severity mapping
   final Map<String, double> _crimeSeverity = {
     'robbery': 4.0,
@@ -57,17 +66,50 @@ class _MapScreenState extends State<MapScreen> {
     'theft': 2.5,
   };
 
+  // New color scheme
+  final Color _primaryColor = Color(0xFF4A6FE3); // Blue primary color
+  final Color _accentColor = Color(0xFF6C63FF); // Purple accent color
+  final Color _backgroundColor = Color(0xFFF5F7FB); // Light background
+  final Color _cardColor = Colors.white;
+  final Color _textColor = Color(0xFF2D3748); // Dark text color
+  final Color _secondaryTextColor = Color(0xFF718096); // Secondary text color
+  final Color _dangerColor =
+      Color(0xFFE53E3E); // Red for danger/crime indicators
+
   @override
   void initState() {
     super.initState();
     _initializeApp();
+
+    // Add listeners for text controllers to show/hide suggestions
+    _sourceController.addListener(() {
+      if (_sourceController.text.isNotEmpty) {
+        _getSearchSuggestions(_sourceController.text, isSource: true);
+      } else {
+        setState(() {
+          _sourceSuggestions = [];
+          _showSourceSuggestions = false;
+        });
+      }
+    });
+
+    _destinationController.addListener(() {
+      if (_destinationController.text.isNotEmpty) {
+        _getSearchSuggestions(_destinationController.text, isSource: false);
+      } else {
+        setState(() {
+          _destinationSuggestions = [];
+          _showDestinationSuggestions = false;
+        });
+      }
+    });
   }
 
   Future<void> _initializeApp() async {
     try {
       await _loadEnv();
       await _loadModel();
-      await _getCurrentLocation(); // Get initial current location
+      await _loadInitialLocation(); // Changed from _getCurrentLocation to a new method
       await _loadCrimeData();
     } catch (e) {
       setState(() {
@@ -88,7 +130,8 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  void _updateCrimeVisualization() { //agr user off krdy ga to crime circle erase ho jay gy
+  void _updateCrimeVisualization() {
+    //agr user off krdy ga to crime circle erase ho jay gy
     if (!_showCrimeHotspots) {
       setState(() {
         _crimeMarkers = [];
@@ -98,13 +141,13 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     // Create markers for individual crimes
-    final crimeMarkers = <CircleMarker>[]; 
+    final crimeMarkers = <CircleMarker>[];
     final hotspotMarkers = <CircleMarker>[];
     final crimeDensity = <String, int>{};
 
     // Calculate crime density in 100m x 100m grid cells
     const double gridSize = 0.001; // approximately 100m
-    
+
     // Process all crimes in a single pass
     for (var crime in _crimeLocations) {
       // Add individual crime marker
@@ -121,7 +164,8 @@ class _MapScreenState extends State<MapScreen> {
       // Update crime density
       double lat = crime['lat'];
       double lng = crime['lng'];
-      String cellKey = '${(lat / gridSize).round()},${(lng / gridSize).round()}';
+      String cellKey =
+          '${(lat / gridSize).round()},${(lng / gridSize).round()}';
       crimeDensity[cellKey] = (crimeDensity[cellKey] ?? 0) + 1;
     }
 
@@ -152,7 +196,7 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
-  Future<void> _getCurrentLocation() async {
+  Future<void> _loadInitialLocation() async {
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
@@ -175,12 +219,12 @@ class _MapScreenState extends State<MapScreen> {
 
       Position position = await Geolocator.getCurrentPosition();
       final newCenter = latlong.LatLng(position.latitude, position.longitude);
-      
+
       setState(() {
         _currentPosition = position;
         _center = newCenter;
       });
-      
+
       _mapController.move(newCenter, 15.0);
     } catch (e) {
       setState(() {
@@ -189,16 +233,107 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  Future<void> _getCurrentLocation() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        setState(() {
+          result = "Location services are disabled.";
+        });
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          setState(() {
+            result = "Location permissions are denied";
+          });
+          return;
+        }
+      }
+
+      setState(() {
+        isLoading = true;
+      });
+
+      Position position = await Geolocator.getCurrentPosition();
+      final newCenter = latlong.LatLng(position.latitude, position.longitude);
+
+      // Get address from coordinates
+      try {
+        List<Placemark> placemarks = await placemarkFromCoordinates(
+          position.latitude,
+          position.longitude,
+        );
+
+        if (placemarks.isNotEmpty) {
+          Placemark place = placemarks.first;
+          String address = '';
+
+          if (place.thoroughfare != null && place.thoroughfare!.isNotEmpty) {
+            address += place.thoroughfare!;
+          }
+
+          if (place.subLocality != null && place.subLocality!.isNotEmpty) {
+            if (address.isNotEmpty) address += ', ';
+            address += place.subLocality!;
+          }
+
+          if (place.locality != null && place.locality!.isNotEmpty) {
+            if (address.isNotEmpty) address += ', ';
+            address += place.locality!;
+          }
+
+          if (address.isEmpty) {
+            address =
+                "Current Location (${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)})";
+          }
+
+          // Update source field and location
+          _sourceController.text = address;
+          _sourceLocation = newCenter;
+        }
+      } catch (e) {
+        // If geocoding fails, use coordinates
+        _sourceController.text =
+            "Current Location (${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)})";
+        _sourceLocation = newCenter;
+      }
+
+      setState(() {
+        _currentPosition = position;
+        _center = newCenter;
+        isLoading = false;
+      });
+
+      _mapController.move(newCenter, 15.0);
+
+      // If destination is already set, find routes
+      if (_destinationLocation != null) {
+        _findRoutes();
+      }
+    } catch (e) {
+      setState(() {
+        result = "Error getting location";
+        isLoading = false;
+      });
+    }
+  }
+
   void _handleMapTap(tapPosition, latlong.LatLng tappedPoint) {
     if (_sourceLocation == null) {
       setState(() {
         _sourceLocation = tappedPoint;
-        _sourceController.text = "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
+        _sourceController.text =
+            "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
       });
     } else if (_destinationLocation == null) {
       setState(() {
         _destinationLocation = tappedPoint;
-        _destinationController.text = "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
+        _destinationController.text =
+            "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
       });
       _findRoutes(); // Find routes when both are set
     } else {
@@ -208,7 +343,8 @@ class _MapScreenState extends State<MapScreen> {
         _routePoints = [];
         _alternativeRoutes = [];
         _selectedRouteIndex = 0;
-        _sourceController.text = "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
+        _sourceController.text =
+            "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
         _destinationController.clear();
       });
     }
@@ -222,7 +358,8 @@ class _MapScreenState extends State<MapScreen> {
       List<Location> locations = await locationFromAddress(query);
       if (locations.isNotEmpty) {
         Location location = locations.first;
-        latlong.LatLng newLocation = latlong.LatLng(location.latitude, location.longitude);
+        latlong.LatLng newLocation =
+            latlong.LatLng(location.latitude, location.longitude);
 
         setState(() {
           if (isSource) {
@@ -239,7 +376,6 @@ class _MapScreenState extends State<MapScreen> {
         if (_sourceLocation != null && _destinationLocation != null) {
           _findRoutes();
         }
-
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -248,7 +384,8 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  Future<Map<String, dynamic>> _calculateCrimeMetrics(List<latlong.LatLng> points) async {
+  Future<Map<String, dynamic>> _calculateCrimeMetrics(
+      List<latlong.LatLng> points) async {
     int crimeCount = 0;
     double totalSeverity = 0;
     int severityCount = 0;
@@ -258,7 +395,8 @@ class _MapScreenState extends State<MapScreen> {
     for (var crime in _crimeLocations) {
       double crimeLat = crime['lat'];
       double crimeLng = crime['lng'];
-      String crimeType = crime['crime_type']?.toString().toLowerCase() ?? 'theft';
+      String crimeType =
+          crime['crime_type']?.toString().toLowerCase() ?? 'theft';
 
       for (var point in points) {
         double distance = Geolocator.distanceBetween(
@@ -317,7 +455,8 @@ class _MapScreenState extends State<MapScreen> {
           }
 
           // Calculate crime metrics for this route
-          Map<String, dynamic> crimeMetrics = await _calculateCrimeMetrics(points);
+          Map<String, dynamic> crimeMetrics =
+              await _calculateCrimeMetrics(points);
 
           // Calculate safety score for this route
           double safetyScore = await _calculateRouteSafetyScore(
@@ -337,26 +476,30 @@ class _MapScreenState extends State<MapScreen> {
         }
 
         // Sort routes by safety score (highest first)
-        _alternativeRoutes.sort((a, b) => b['safetyScore'].compareTo(a['safetyScore']));
+        _alternativeRoutes
+            .sort((a, b) => b['safetyScore'].compareTo(a['safetyScore']));
 
         setState(() {
           if (_alternativeRoutes.isNotEmpty) {
             _selectedRouteIndex = 0; // Initialize to the first (safest) route
             _routePoints = _alternativeRoutes[0]['points'];
-            print('Routes found. Initial route index set to: $_selectedRouteIndex');
+            print(
+                'Routes found. Initial route index set to: $_selectedRouteIndex');
           } else {
             _selectedRouteIndex = -1;
             _routePoints = [];
-            print('No routes found. Route index reset to: $_selectedRouteIndex');
+            print(
+                'No routes found. Route index reset to: $_selectedRouteIndex');
           }
-          result = "Found ${_alternativeRoutes.length} routes. Safety scores calculated.";
+          result =
+              "Found ${_alternativeRoutes.length} routes. Safety scores calculated.";
         });
       } else {
-         setState(() {
-           result = "Error finding routes: ${response.statusCode}";
-           _selectedRouteIndex = -1;
-           _routePoints = [];
-         });
+        setState(() {
+          result = "Error finding routes: ${response.statusCode}";
+          _selectedRouteIndex = -1;
+          _routePoints = [];
+        });
       }
     } catch (e) {
       setState(() {
@@ -381,26 +524,27 @@ class _MapScreenState extends State<MapScreen> {
       double pathLength = 0;
       for (int i = 0; i < points.length - 1; i++) {
         pathLength += Geolocator.distanceBetween(
-          points[i].latitude,
-          points[i].longitude,
-          points[i + 1].latitude,
-          points[i + 1].longitude,
-        ) / 1000; // Convert to kilometers
+              points[i].latitude,
+              points[i].longitude,
+              points[i + 1].latitude,
+              points[i + 1].longitude,
+            ) /
+            1000; // Convert to kilometers
       }
 
       // Prepare input for the model
       List<double> input = [
-        points.first.latitude,  // start_lat
+        points.first.latitude, // start_lat
         points.first.longitude, // start_lng
-        points.last.latitude,   // end_lat
-        points.last.longitude,  // end_lng
+        points.last.latitude, // end_lat
+        points.last.longitude, // end_lng
         _selectedTime.hour / 24.0, // time_of_day normalized
-        _selectedDay / 7.0,     // day_of_week normalized
-        0.0,                    // city (Lahore) - Assuming 0.0 for Lahore based on potential model input
-        crimeCount.toDouble(),  // crime_count_nearby
-        avgSeverity,            // avg_crime_severity
-        pathLength,             // path_length_km
-        1.0                     // path_id - Assuming 1.0 as a placeholder for path ID if needed by the model
+        _selectedDay / 7.0, // day_of_week normalized
+        0.0, // city (Lahore) - Assuming 0.0 for Lahore based on potential model input
+        crimeCount.toDouble(), // crime_count_nearby
+        avgSeverity, // avg_crime_severity
+        pathLength, // path_length_km
+        1.0 // path_id - Assuming 1.0 as a placeholder for path ID if needed by the model
       ];
 
       return await _mlService.predictSafetyScore(input);
@@ -440,13 +584,13 @@ class _MapScreenState extends State<MapScreen> {
   void _selectRoute(int index) {
     print('Selecting route at index: $index');
     print('Number of alternative routes: ${_alternativeRoutes.length}');
-    
+
     setState(() {
       _selectedRouteIndex = index;
       _routePoints = _alternativeRoutes[index]['points'];
       print('Selected route index set to: $_selectedRouteIndex');
       print('Route points length: ${_routePoints.length}');
-      
+
       // Optionally move the map to center the selected route
       if (_routePoints.isNotEmpty) {
         final bounds = LatLngBounds.fromPoints(_routePoints);
@@ -469,7 +613,7 @@ class _MapScreenState extends State<MapScreen> {
     print('Starting navigation...');
     print('Alternative routes length: ${_alternativeRoutes.length}');
     print('Selected route index: $_selectedRouteIndex');
-    
+
     if (_alternativeRoutes.isEmpty) {
       print('No routes available');
       ScaffoldMessenger.of(context).showSnackBar(
@@ -478,7 +622,8 @@ class _MapScreenState extends State<MapScreen> {
       return;
     }
 
-    if (_selectedRouteIndex < 0 || _selectedRouteIndex >= _alternativeRoutes.length) {
+    if (_selectedRouteIndex < 0 ||
+        _selectedRouteIndex >= _alternativeRoutes.length) {
       print('Invalid route index: $_selectedRouteIndex');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Please select a route first')),
@@ -507,18 +652,131 @@ class _MapScreenState extends State<MapScreen> {
     setState(() {});
   }
 
+  // Add new method for getting search suggestions
+  Future<void> _getSearchSuggestions(String query,
+      {required bool isSource}) async {
+    if (query.isEmpty) {
+      setState(() {
+        if (isSource) {
+          _sourceSuggestions = [];
+          _isSearchingSource = false;
+          _showSourceSuggestions = false;
+        } else {
+          _destinationSuggestions = [];
+          _isSearchingDestination = false;
+          _showDestinationSuggestions = false;
+        }
+      });
+      return;
+    }
+
+    setState(() {
+      if (isSource) {
+        _isSearchingSource = true;
+        _showSourceSuggestions = true;
+      } else {
+        _isSearchingDestination = true;
+        _showDestinationSuggestions = true;
+      }
+    });
+
+    try {
+      final mapboxToken = dotenv.env['MAPBOX_TOKEN'] ?? '';
+      if (mapboxToken.isEmpty) {
+        setState(() {
+          if (isSource)
+            _isSearchingSource = false;
+          else
+            _isSearchingDestination = false;
+        });
+        return;
+      }
+
+      // Mapbox Geocoding API endpoint for place suggestions
+      final url = Uri.parse(
+          'https://api.mapbox.com/geocoding/v5/mapbox.places/$query.json?access_token=$mapboxToken&autocomplete=true&limit=5');
+
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final features = data['features'] as List;
+
+        List<Map<String, dynamic>> suggestions = [];
+
+        for (var feature in features) {
+          suggestions.add({
+            'name': feature['place_name'] as String,
+            'coordinates': latlong.LatLng(
+              feature['center'][1] as double,
+              feature['center'][0] as double,
+            ),
+          });
+        }
+
+        setState(() {
+          if (isSource) {
+            _sourceSuggestions = suggestions;
+            _isSearchingSource = false;
+          } else {
+            _destinationSuggestions = suggestions;
+            _isSearchingDestination = false;
+          }
+        });
+      }
+    } catch (e) {
+      print('Error getting search suggestions: $e');
+      setState(() {
+        if (isSource)
+          _isSearchingSource = false;
+        else
+          _isSearchingDestination = false;
+      });
+    }
+  }
+
+  void _selectSuggestion(Map<String, dynamic> suggestion,
+      {required bool isSource}) {
+    if (isSource) {
+      _sourceController.text = suggestion['name'];
+      _sourceLocation = suggestion['coordinates'];
+      setState(() {
+        _showSourceSuggestions = false;
+        _sourceSuggestions = [];
+      });
+    } else {
+      _destinationController.text = suggestion['name'];
+      _destinationLocation = suggestion['coordinates'];
+      setState(() {
+        _showDestinationSuggestions = false;
+        _destinationSuggestions = [];
+      });
+    }
+
+    _mapController.move(suggestion['coordinates'], 15.0);
+
+    // If both source and destination are set, find routes
+    if (_sourceLocation != null && _destinationLocation != null) {
+      _findRoutes();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!isEnvLoaded) {
       return Scaffold(
-        appBar: AppBar(title: Text("SafeRoute Map")),
+        appBar: AppBar(
+          title: Text("SafeRoute Map", style: TextStyle(color: _textColor)),
+          backgroundColor: _cardColor,
+        ),
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              CircularProgressIndicator(),
+              CircularProgressIndicator(color: _primaryColor),
               SizedBox(height: 16),
-              Text("Loading environment...", style: TextStyle(fontSize: 16)),
+              Text("Loading environment...",
+                  style: TextStyle(fontSize: 16, color: _textColor)),
             ],
           ),
         ),
@@ -528,32 +786,39 @@ class _MapScreenState extends State<MapScreen> {
     final mapboxToken = dotenv.env['MAPBOX_TOKEN'] ?? '';
     if (mapboxToken.isEmpty) {
       return Scaffold(
-        appBar: AppBar(title: Text("SafeRoute Map")),
+        appBar: AppBar(
+          title: Text("SafeRoute Map", style: TextStyle(color: _textColor)),
+          backgroundColor: _cardColor,
+        ),
         body: Center(
-          child: Text("Mapbox token not found. Please check your .env file."),
+          child: Text("Mapbox token not found. Please check your .env file.",
+              style: TextStyle(color: _textColor)),
         ),
       );
     }
 
     // Determine the currently selected route for details display
-    final selectedRoute = _alternativeRoutes.isNotEmpty ? _alternativeRoutes[_selectedRouteIndex] : null;
+    final selectedRoute = _alternativeRoutes.isNotEmpty
+        ? _alternativeRoutes[_selectedRouteIndex]
+        : null;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text("SafeRoute Map"),
-        backgroundColor: Colors.black87,
-        foregroundColor: Colors.white,
+        title: Text("SafeRoute Map",
+            style: TextStyle(color: _textColor, fontWeight: FontWeight.bold)),
+        backgroundColor: _cardColor,
+        elevation: 2,
         actions: [
           if (_navigationService.isNavigating)
             IconButton(
-              icon: Icon(Icons.close, color: Colors.white),
+              icon: Icon(Icons.close, color: _dangerColor),
               onPressed: _stopNavigation,
               tooltip: 'Stop Navigation',
             ),
           IconButton(
             icon: Icon(
               _showCrimeHotspots ? Icons.layers : Icons.layers_clear,
-              color: _showCrimeHotspots ? Colors.purpleAccent : Colors.grey,
+              color: _showCrimeHotspots ? _accentColor : Colors.grey,
             ),
             onPressed: () {
               setState(() {
@@ -579,7 +844,8 @@ class _MapScreenState extends State<MapScreen> {
             ),
             children: [
               TileLayer(
-                urlTemplate: 'https://api.mapbox.com/styles/v1/mapbox/dark-v10/tiles/256/{z}/{x}/{y}@2x?access_token={accessToken}',
+                urlTemplate:
+                    'https://api.mapbox.com/styles/v1/mapbox/streets-v11/tiles/256/{z}/{x}/{y}@2x?access_token={accessToken}',
                 additionalOptions: {
                   'accessToken': mapboxToken,
                 },
@@ -598,7 +864,9 @@ class _MapScreenState extends State<MapScreen> {
                       final route = entry.value;
                       return Polyline(
                         points: route['points'],
-                        color: index == _selectedRouteIndex ? Colors.purpleAccent : Colors.blueGrey.withOpacity(0.6),
+                        color: index == _selectedRouteIndex
+                            ? _accentColor
+                            : Colors.blueGrey.withOpacity(0.6),
                         strokeWidth: index == _selectedRouteIndex ? 5.0 : 3.0,
                       );
                     }).toList(),
@@ -608,24 +876,28 @@ class _MapScreenState extends State<MapScreen> {
                 markers: [
                   if (_currentPosition != null)
                     Marker(
-                      point: latlong.LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
+                      point: latlong.LatLng(_currentPosition!.latitude,
+                          _currentPosition!.longitude),
                       width: 40,
                       height: 40,
-                      child: Icon(Icons.directions_car, color: Colors.white, size: 30),
+                      child: Icon(Icons.directions_car,
+                          color: _primaryColor, size: 30),
                     ),
                   if (_sourceLocation != null)
                     Marker(
                       point: _sourceLocation!,
                       width: 40,
                       height: 40,
-                      child: Icon(Icons.my_location, color: Colors.greenAccent, size: 30),
+                      child: Icon(Icons.my_location,
+                          color: Colors.green, size: 30),
                     ),
                   if (_destinationLocation != null)
                     Marker(
                       point: _destinationLocation!,
                       width: 40,
                       height: 40,
-                      child: Icon(Icons.location_on, color: Colors.purpleAccent, size: 30),
+                      child: Icon(Icons.location_on,
+                          color: _accentColor, size: 30),
                     ),
                 ],
               ),
@@ -638,8 +910,8 @@ class _MapScreenState extends State<MapScreen> {
             right: 16,
             child: FloatingActionButton(
               onPressed: _getCurrentLocation,
-              child: Icon(Icons.my_location, color: Colors.purple),
-              backgroundColor: Colors.white,
+              child: Icon(Icons.my_location, color: Colors.white),
+              backgroundColor: _primaryColor,
             ),
           ),
 
@@ -649,240 +921,479 @@ class _MapScreenState extends State<MapScreen> {
             right: 0,
             bottom: 0,
             child: Container(
-              padding: EdgeInsets.all(16),
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.7,
+              ),
               decoration: BoxDecoration(
-                color: Colors.black87,
+                color: _cardColor,
                 borderRadius: BorderRadius.only(
                   topLeft: Radius.circular(20),
                   topRight: Radius.circular(20),
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.5),
+                    color: Colors.black.withOpacity(0.1),
                     blurRadius: 10,
-                    spreadRadius: 5,
+                    spreadRadius: 0,
+                    offset: Offset(0, -2),
                   ),
                 ],
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (_alternativeRoutes.isEmpty)
-                    Column(
-                      children: [
-                        TextField(
-                          controller: _sourceController,
-                          style: TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            hintText: 'Enter Starting Point',
-                            hintStyle: TextStyle(color: Colors.white70),
-                            prefixIcon: Icon(Icons.my_location, color: Colors.greenAccent),
-                            filled: true,
-                            fillColor: Colors.white12,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: BorderSide.none,
-                            ),
-                          ),
-                          onSubmitted: (query) => _searchLocation(query, isSource: true),
-                        ),
-                        SizedBox(height: 16),
-                        TextField(
-                          controller: _destinationController,
-                          style: TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            hintText: 'Enter Destination',
-                            hintStyle: TextStyle(color: Colors.white70),
-                            prefixIcon: Icon(Icons.location_on, color: Colors.purpleAccent),
-                            filled: true,
-                            fillColor: Colors.white12,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: BorderSide.none,
-                            ),
-                          ),
-                          onSubmitted: (query) => _searchLocation(query, isSource: false),
-                        ),
-                        SizedBox(height: 16),
-                        if (isLoading) CircularProgressIndicator(color: Colors.purpleAccent),
-                        if (!isLoading && (_sourceLocation != null || _destinationLocation != null) && !result.contains("Model loaded successfully"))
-                          Padding(
-                            padding: const EdgeInsets.only(top: 8.0),
-                            child: Text(
-                              result,
-                              style: TextStyle(color: Colors.white70),
-                            ),
-                          ),
-                      ],
-                    )
-                  else
-                    Column(
+              child: SafeArea(
+                top: false,
+                child: SingleChildScrollView(
+                  physics: ClampingScrollPhysics(),
+                  padding: EdgeInsets.only(bottom: 8),
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(16, 16, 16, 0),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (selectedRoute != null)
+                        if (_alternativeRoutes.isEmpty)
+                          Column(
+                            children: [
+                              // Source input with suggestions
+                              Container(
+                                margin: EdgeInsets.only(
+                                    bottom: _showSourceSuggestions ? 0 : 16),
+                                child: TextField(
+                                  controller: _sourceController,
+                                  style: TextStyle(color: _textColor),
+                                  decoration: InputDecoration(
+                                    hintText: 'Enter Starting Point',
+                                    hintStyle:
+                                        TextStyle(color: _secondaryTextColor),
+                                    prefixIcon: Icon(Icons.my_location,
+                                        color: Colors.green),
+                                    filled: true,
+                                    fillColor: _backgroundColor,
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                      borderSide: BorderSide.none,
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                      borderSide: BorderSide(
+                                          color: _primaryColor, width: 1.5),
+                                    ),
+                                  ),
+                                  onSubmitted: (query) =>
+                                      _searchLocation(query, isSource: true),
+                                  onTap: () {
+                                    if (_sourceController.text.isNotEmpty) {
+                                      setState(() {
+                                        _showSourceSuggestions = true;
+                                      });
+                                    }
+                                  },
+                                ),
+                              ),
+
+                              // Source suggestions
+                              if (_showSourceSuggestions)
+                                Container(
+                                  margin: EdgeInsets.only(bottom: 16),
+                                  decoration: BoxDecoration(
+                                    color: _cardColor,
+                                    borderRadius: BorderRadius.circular(10),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.1),
+                                        blurRadius: 4,
+                                        spreadRadius: 0,
+                                        offset: Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  constraints: BoxConstraints(maxHeight: 200),
+                                  child: _isSearchingSource
+                                      ? Center(
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(8.0),
+                                            child: CircularProgressIndicator(
+                                                color: _primaryColor),
+                                          ),
+                                        )
+                                      : _sourceSuggestions.isEmpty
+                                          ? Padding(
+                                              padding:
+                                                  const EdgeInsets.all(12.0),
+                                              child: Text(
+                                                "No suggestions found",
+                                                style: TextStyle(
+                                                    color: _secondaryTextColor),
+                                              ),
+                                            )
+                                          : ListView.builder(
+                                              shrinkWrap: true,
+                                              padding: EdgeInsets.zero,
+                                              itemCount:
+                                                  _sourceSuggestions.length,
+                                              itemBuilder: (context, index) {
+                                                final suggestion =
+                                                    _sourceSuggestions[index];
+                                                return ListTile(
+                                                  title: Text(
+                                                    suggestion['name'],
+                                                    style: TextStyle(
+                                                        color: _textColor),
+                                                  ),
+                                                  leading: Icon(
+                                                      Icons.location_on,
+                                                      color: _primaryColor),
+                                                  onTap: () =>
+                                                      _selectSuggestion(
+                                                          suggestion,
+                                                          isSource: true),
+                                                );
+                                              },
+                                            ),
+                                ),
+
+                              // Destination input with suggestions
+                              Container(
+                                margin: EdgeInsets.only(
+                                    bottom:
+                                        _showDestinationSuggestions ? 0 : 16),
+                                child: TextField(
+                                  controller: _destinationController,
+                                  style: TextStyle(color: _textColor),
+                                  decoration: InputDecoration(
+                                    hintText: 'Enter Destination',
+                                    hintStyle:
+                                        TextStyle(color: _secondaryTextColor),
+                                    prefixIcon: Icon(Icons.location_on,
+                                        color: _accentColor),
+                                    filled: true,
+                                    fillColor: _backgroundColor,
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                      borderSide: BorderSide.none,
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                      borderSide: BorderSide(
+                                          color: _accentColor, width: 1.5),
+                                    ),
+                                  ),
+                                  onSubmitted: (query) =>
+                                      _searchLocation(query, isSource: false),
+                                  onTap: () {
+                                    if (_destinationController
+                                        .text.isNotEmpty) {
+                                      setState(() {
+                                        _showDestinationSuggestions = true;
+                                      });
+                                    }
+                                  },
+                                ),
+                              ),
+
+                              // Destination suggestions
+                              if (_showDestinationSuggestions)
+                                Container(
+                                  margin: EdgeInsets.only(bottom: 16),
+                                  decoration: BoxDecoration(
+                                    color: _cardColor,
+                                    borderRadius: BorderRadius.circular(10),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.1),
+                                        blurRadius: 4,
+                                        spreadRadius: 0,
+                                        offset: Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  constraints: BoxConstraints(maxHeight: 200),
+                                  child: _isSearchingDestination
+                                      ? Center(
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(8.0),
+                                            child: CircularProgressIndicator(
+                                                color: _accentColor),
+                                          ),
+                                        )
+                                      : _destinationSuggestions.isEmpty
+                                          ? Padding(
+                                              padding:
+                                                  const EdgeInsets.all(12.0),
+                                              child: Text(
+                                                "No suggestions found",
+                                                style: TextStyle(
+                                                    color: _secondaryTextColor),
+                                              ),
+                                            )
+                                          : ListView.builder(
+                                              shrinkWrap: true,
+                                              padding: EdgeInsets.zero,
+                                              itemCount: _destinationSuggestions
+                                                  .length,
+                                              itemBuilder: (context, index) {
+                                                final suggestion =
+                                                    _destinationSuggestions[
+                                                        index];
+                                                return ListTile(
+                                                  title: Text(
+                                                    suggestion['name'],
+                                                    style: TextStyle(
+                                                        color: _textColor),
+                                                  ),
+                                                  leading: Icon(
+                                                      Icons.location_on,
+                                                      color: _accentColor),
+                                                  onTap: () =>
+                                                      _selectSuggestion(
+                                                          suggestion,
+                                                          isSource: false),
+                                                );
+                                              },
+                                            ),
+                                ),
+
+                              if (isLoading)
+                                Center(
+                                    child: CircularProgressIndicator(
+                                        color: _accentColor)),
+                              if (!isLoading &&
+                                  (_sourceLocation != null ||
+                                      _destinationLocation != null) &&
+                                  !result.contains("Model loaded successfully"))
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8.0),
+                                  child: Text(
+                                    result,
+                                    style:
+                                        TextStyle(color: _secondaryTextColor),
+                                  ),
+                                ),
+                            ],
+                          )
+                        else
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
                             children: [
+                              if (selectedRoute != null)
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      "${(selectedRoute['duration'] / 60).round()} min (${(selectedRoute['distance'] / 1000).toStringAsFixed(1)} km)",
+                                      style: TextStyle(
+                                        fontSize: 20,
+                                        fontWeight: FontWeight.bold,
+                                        color: _textColor,
+                                      ),
+                                    ),
+                                    SizedBox(height: 2),
+                                    Text(
+                                      "Route ${_selectedRouteIndex + 1} - Safety Score: ${selectedRoute['safetyScore'].toStringAsFixed(2)}",
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        color: _accentColor,
+                                      ),
+                                    ),
+                                    SizedBox(height: 10),
+                                    Align(
+                                      alignment: Alignment.center,
+                                      child: Container(
+                                        padding: EdgeInsets.symmetric(
+                                            horizontal: 12, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: _primaryColor,
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                        ),
+                                        child: Text(
+                                          "Safety: ${selectedRoute['safetyScore'].toStringAsFixed(2)}",
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 15,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    SizedBox(height: 10),
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Column(
+                                          children: [
+                                            Icon(Icons.my_location,
+                                                color: Colors.green, size: 18),
+                                            SizedBox(height: 3),
+                                            Icon(Icons.more_vert,
+                                                color: _secondaryTextColor,
+                                                size: 18),
+                                            SizedBox(height: 3),
+                                            Icon(Icons.location_on,
+                                                color: _accentColor, size: 18),
+                                          ],
+                                        ),
+                                        SizedBox(width: 8),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                _sourceController
+                                                        .text.isNotEmpty
+                                                    ? _sourceController.text
+                                                    : "Starting Point",
+                                                style: TextStyle(
+                                                    color: _textColor,
+                                                    fontSize: 13),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              SizedBox(height: 10),
+                                              Text(
+                                                _destinationController
+                                                        .text.isNotEmpty
+                                                    ? _destinationController
+                                                        .text
+                                                    : "Destination",
+                                                style: TextStyle(
+                                                    color: _textColor,
+                                                    fontSize: 13),
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              SizedBox(height: 10),
                               Text(
-                                "${(selectedRoute['duration'] / 60).round()} min (${(selectedRoute['distance'] / 1000).toStringAsFixed(1)} km)",
+                                "Available Routes:",
                                 style: TextStyle(
-                                  fontSize: 24,
+                                  fontSize: 14,
                                   fontWeight: FontWeight.bold,
-                                  color: Colors.white,
+                                  color: _textColor,
                                 ),
                               ),
                               SizedBox(height: 4),
-                              Text(
-                                "Route ${_selectedRouteIndex + 1} - Safety Score: ${selectedRoute['safetyScore'].toStringAsFixed(2)}",
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: Colors.purpleAccent,
+                              SizedBox(
+                                height: 85,
+                                child: ListView.builder(
+                                  scrollDirection: Axis.horizontal,
+                                  itemCount: _alternativeRoutes.length,
+                                  itemBuilder: (context, index) {
+                                    final route = _alternativeRoutes[index];
+                                    final isSelected =
+                                        index == _selectedRouteIndex;
+                                    return GestureDetector(
+                                      onTap: () => _selectRoute(index),
+                                      child: Card(
+                                        color: isSelected
+                                            ? _primaryColor
+                                            : _backgroundColor,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                          side: isSelected
+                                              ? BorderSide(
+                                                  color: _accentColor,
+                                                  width: 1.5)
+                                              : BorderSide.none,
+                                        ),
+                                        elevation: isSelected ? 3 : 1,
+                                        margin: EdgeInsets.only(
+                                            right: 8, bottom: 2),
+                                        child: Container(
+                                          width: 150,
+                                          padding: EdgeInsets.all(8),
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                "Route ${index + 1}",
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 13,
+                                                  color: isSelected
+                                                      ? Colors.white
+                                                      : _textColor,
+                                                ),
+                                              ),
+                                              SizedBox(height: 2),
+                                              Text(
+                                                "${(route['duration'] / 60).round()} min | ${(route['distance'] / 1000).toStringAsFixed(1)} km",
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: isSelected
+                                                      ? Colors.white70
+                                                      : _secondaryTextColor,
+                                                ),
+                                              ),
+                                              SizedBox(height: 2),
+                                              Text(
+                                                "Safety: ${route['safetyScore'].toStringAsFixed(2)}",
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: isSelected
+                                                      ? Colors.white
+                                                      : _accentColor,
+                                                  fontWeight: isSelected
+                                                      ? FontWeight.bold
+                                                      : FontWeight.normal,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
                                 ),
                               ),
-                              SizedBox(height: 16),
-                              Align(
-                                alignment: Alignment.center,
-                                child: Container(
-                                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                  decoration: BoxDecoration(
-                                    color: Colors.purpleAccent,
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: Text(
-                                    "Safety: ${selectedRoute['safetyScore'].toStringAsFixed(2)}",
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 18,
+                              // Add Start Navigation button inside the bottom panel
+                              if (!_navigationService.isNavigating)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 10.0),
+                                  child: SizedBox(
+                                    width: double.infinity,
+                                    height: 40,
+                                    child: ElevatedButton(
+                                      onPressed: _startNavigation,
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: _accentColor,
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                        ),
+                                        elevation: 1,
+                                        padding: EdgeInsets.zero,
+                                      ),
+                                      child: Text(
+                                        'Start Navigation',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                              SizedBox(height: 16),
-                              Row(
-                                children: [
-                                  Column(
-                                    children: [
-                                      Icon(Icons.my_location, color: Colors.greenAccent, size: 20),
-                                      SizedBox(height: 4),
-                                      Icon(Icons.more_vert, color: Colors.white70, size: 20),
-                                      SizedBox(height: 4),
-                                      Icon(Icons.location_on, color: Colors.purpleAccent, size: 20),
-                                    ],
-                                  ),
-                                  SizedBox(width: 8),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          _sourceController.text.isNotEmpty ? _sourceController.text : "Starting Point",
-                                          style: TextStyle(color: Colors.white, fontSize: 16),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        SizedBox(height: 12),
-                                        Text(
-                                          _destinationController.text.isNotEmpty ? _destinationController.text : "Destination",
-                                          style: TextStyle(color: Colors.white, fontSize: 16),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
                             ],
                           ),
-                        SizedBox(height: 16),
-                        Container(
-                          height: 100,
-                          child: ListView.builder(
-                            scrollDirection: Axis.horizontal,
-                            itemCount: _alternativeRoutes.length,
-                            itemBuilder: (context, index) {
-                              final route = _alternativeRoutes[index];
-                              final isSelected = index == _selectedRouteIndex;
-                              return GestureDetector(
-                                onTap: () => _selectRoute(index),
-                                child: Card(
-                                  color: isSelected ? Colors.purple.withOpacity(0.8) : Colors.black54,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                    side: isSelected ? BorderSide(color: Colors.purpleAccent, width: 2) : BorderSide.none,
-                                  ),
-                                  child: Container(
-                                    width: 180,
-                                    padding: EdgeInsets.all(12),
-                                    child: Column(
-                                      mainAxisSize: MainAxisSize.min,
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          "Route ${index + 1}",
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 16,
-                                            color: isSelected ? Colors.white : Colors.white70,
-                                          ),
-                                        ),
-                                        SizedBox(height: 4),
-                                        Text(
-                                          "${(route['duration'] / 60).round()} min | ${(route['distance'] / 1000).toStringAsFixed(1)} km",
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            color: isSelected ? Colors.white70 : Colors.white54,
-                                          ),
-                                        ),
-                                        SizedBox(height: 4),
-                                        Text(
-                                          "Safety: ${route['safetyScore'].toStringAsFixed(2)}",
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            color: Colors.greenAccent,
-                                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
                       ],
                     ),
-                ],
+                  ),
+                ),
               ),
             ),
           ),
-
-          // Start Navigation Button
-          if (_alternativeRoutes.isNotEmpty && !_navigationService.isNavigating)
-            Positioned(
-              bottom: 16,
-              left: 16,
-              right: 16,
-              child: ElevatedButton(
-                onPressed: _startNavigation,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.purpleAccent,
-                  padding: EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(30),
-                  ),
-                ),
-                child: Text(
-                  'Start Navigation',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
 
           // Navigation Info Panel
           if (_navigationService.isNavigating)
@@ -893,7 +1404,7 @@ class _MapScreenState extends State<MapScreen> {
               child: Container(
                 padding: EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.black87,
+                  color: _cardColor,
                   borderRadius: BorderRadius.circular(20),
                   boxShadow: [
                     BoxShadow(
@@ -909,7 +1420,7 @@ class _MapScreenState extends State<MapScreen> {
                     Text(
                       'Navigation Active',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: _textColor,
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
@@ -918,7 +1429,7 @@ class _MapScreenState extends State<MapScreen> {
                     Text(
                       'Following the safest route to your destination',
                       style: TextStyle(
-                        color: Colors.white70,
+                        color: _secondaryTextColor,
                         fontSize: 14,
                       ),
                     ),
@@ -952,12 +1463,12 @@ class _MapScreenState extends State<MapScreen> {
   Widget _buildNavigationInfo(IconData icon, String text) {
     return Column(
       children: [
-        Icon(icon, color: Colors.purpleAccent, size: 24),
+        Icon(icon, color: _accentColor, size: 24),
         SizedBox(height: 4),
         Text(
           text,
           style: TextStyle(
-            color: Colors.white,
+            color: _textColor,
             fontSize: 14,
           ),
         ),
