@@ -1,0 +1,2 @@
+C:/Users/Shayan/Desktop/New folder/SafeRoute-Project/saferoute/android/app/.cxx/RelWithDebInfo/3c3w2l4p/x86_64/CMakeFiles/edit_cache.dir
+C:/Users/Shayan/Desktop/New folder/SafeRoute-Project/saferoute/android/app/.cxx/RelWithDebInfo/3c3w2l4p/x86_64/CMakeFiles/rebuild_cache.dir

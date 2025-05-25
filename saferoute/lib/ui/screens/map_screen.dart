@@ -3,6 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' as latlong;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'dart:math';
+import 'dart:async';  // Add this import for StreamSubscription
 import '../../services/ml_service.dart';
 import '../../services/firestore_service.dart';
 import '../../services/navigation_service.dart';
@@ -10,6 +11,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:geocoding/geocoding.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class MapScreen extends StatefulWidget {
   @override
@@ -32,6 +34,7 @@ class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
   latlong.LatLng _center = latlong.LatLng(31.4900, 74.3000);
   List<latlong.LatLng> _routePoints = [];
+  String? _selectedCity;
 
   // New variables for location and path finding
   Position? _currentPosition;
@@ -75,6 +78,12 @@ class _MapScreenState extends State<MapScreen> {
   final Color _secondaryTextColor = Color(0xFF718096); // Secondary text color
   final Color _dangerColor =
       Color(0xFFE53E3E); // Red for danger/crime indicators
+
+  // Add new variables for real-time monitoring
+  StreamSubscription? _crimeStreamSubscription;
+  DateTime? _navigationStartTime;
+  bool _isMonitoringCrimes = false;
+  List<Map<String, dynamic>> _recentCrimes = [];
 
   @override
   void initState() {
@@ -322,19 +331,36 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  void _handleMapTap(tapPosition, latlong.LatLng tappedPoint) {
+  void _handleMapTap(tapPosition, latlong.LatLng tappedPoint) async {
     if (_sourceLocation == null) {
       setState(() {
         _sourceLocation = tappedPoint;
         _sourceController.text =
             "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
       });
+      
+      // Detect city from source location
+      String? detectedCity = await _detectCityFromCoordinates(tappedPoint);
+      if (detectedCity != null) {
+        setState(() {
+          _selectedCity = detectedCity;
+        });
+      }
     } else if (_destinationLocation == null) {
       setState(() {
         _destinationLocation = tappedPoint;
         _destinationController.text =
             "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
       });
+      
+      // Detect city from destination location
+      String? detectedCity = await _detectCityFromCoordinates(tappedPoint);
+      if (detectedCity != null) {
+        setState(() {
+          _selectedCity = detectedCity;
+        });
+      }
+      
       _findRoutes(); // Find routes when both are set
     } else {
       setState(() {
@@ -347,6 +373,14 @@ class _MapScreenState extends State<MapScreen> {
             "Tapped: ${tappedPoint.latitude.toStringAsFixed(4)}, ${tappedPoint.longitude.toStringAsFixed(4)}";
         _destinationController.clear();
       });
+      
+      // Detect city from new source location
+      String? detectedCity = await _detectCityFromCoordinates(tappedPoint);
+      if (detectedCity != null) {
+        setState(() {
+          _selectedCity = detectedCity;
+        });
+      }
     }
     _mapController.move(tappedPoint, _mapController.camera.zoom);
   }
@@ -532,19 +566,48 @@ class _MapScreenState extends State<MapScreen> {
             1000; // Convert to kilometers
       }
 
+      // Convert time to required encoding
+      int timeEncoding;
+      int hour = _selectedTime.hour;
+      if (hour >= 12 && hour < 18) {
+        timeEncoding = 0; // Afternoon
+      } else if (hour >= 18 && hour < 24) {
+        timeEncoding = 1; // Evening
+      } else if (hour >= 6 && hour < 12) {
+        timeEncoding = 2; // Morning
+      } else {
+        timeEncoding = 3; // Night
+      }
+
+      // Convert city to required encoding
+      int cityEncoding;
+      switch (_selectedCity?.toLowerCase()) {
+        case 'islamabad':
+          cityEncoding = 1;
+          break;
+        case 'karachi':
+          cityEncoding = 2;
+          break;
+        case 'lahore':
+          cityEncoding = 3;
+          break;
+        default:
+          cityEncoding = 3; // Default to Lahore if city not found
+      }
+
       // Prepare input for the model
       List<double> input = [
         points.first.latitude, // start_lat
         points.first.longitude, // start_lng
         points.last.latitude, // end_lat
         points.last.longitude, // end_lng
-        _selectedTime.hour / 24.0, // time_of_day normalized
+        timeEncoding.toDouble(), // time encoding (0-3)
         _selectedDay / 7.0, // day_of_week normalized
-        0.0, // city (Lahore) - Assuming 0.0 for Lahore based on potential model input
+        cityEncoding.toDouble(), // city encoding (1-3)
         crimeCount.toDouble(), // crime_count_nearby
         avgSeverity, // avg_crime_severity
         pathLength, // path_length_km
-        1.0 // path_id - Assuming 1.0 as a placeholder for path ID if needed by the model
+        0.0 // path_id (always 0)
       ];
 
       return await _mlService.predictSafetyScore(input);
@@ -609,6 +672,142 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
+  // Add new method to start crime monitoring
+  void _startCrimeMonitoring() {
+    if (_isMonitoringCrimes) return;
+
+    setState(() {
+      _isMonitoringCrimes = true;
+      _navigationStartTime = DateTime.now();
+      _recentCrimes = [];
+    });
+
+    // Listen to new crimes in Firestore
+    _crimeStreamSubscription = FirebaseFirestore.instance
+        .collection('firestore_crime')
+        .snapshots()
+        .listen((snapshot) {
+      for (var change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          final newCrime = change.doc.data() as Map<String, dynamic>;
+          _checkNewCrime(newCrime);
+        }
+      }
+    });
+  }
+
+  // Add method to stop crime monitoring
+  void _stopCrimeMonitoring() {
+    _crimeStreamSubscription?.cancel();
+    setState(() {
+      _isMonitoringCrimes = false;
+      _navigationStartTime = null;
+      _recentCrimes = [];
+    });
+  }
+
+  // Add method to check new crimes
+  void _checkNewCrime(Map<String, dynamic> newCrime) {
+    if (!_isMonitoringCrimes || _selectedRouteIndex < 0) return;
+
+    try {
+        // Get crime location
+        final crimeLat = newCrime['latitude'] as double;
+        final crimeLng = newCrime['longitude'] as double;
+        final crimeTime = DateTime.parse(newCrime['date'] + ' ' + newCrime['time']);
+        
+        // Check if crime is recent (within last 5 minutes)
+        if (DateTime.now().difference(crimeTime).inMinutes > 5) return;
+
+        // Check if crime is near the selected route
+        if (_alternativeRoutes.isEmpty || _selectedRouteIndex >= _alternativeRoutes.length) {
+            print('Error: Invalid route index or empty routes');
+            return;
+        }
+
+        final selectedRoute = _alternativeRoutes[_selectedRouteIndex];
+        if (selectedRoute == null || !selectedRoute.containsKey('points')) {
+            print('Error: Invalid route data');
+            return;
+        }
+
+        final routePoints = selectedRoute['points'] as List<latlong.LatLng>;
+        if (routePoints.isEmpty) {
+            print('Error: No route points available');
+            return;
+        }
+        
+        bool isNearRoute = false;
+        for (var point in routePoints) {
+            double distance = Geolocator.distanceBetween(
+                point.latitude,
+                point.longitude,
+                crimeLat,
+                crimeLng,
+            );
+            
+            if (distance <= 500) { // Using 500m radius
+                isNearRoute = true;
+                break;
+            }
+        }
+
+        if (isNearRoute) {
+            setState(() {
+                _recentCrimes.add(newCrime);
+            });
+            _showCrimeAlert(newCrime);
+        }
+    } catch (e) {
+        print('Error processing new crime: $e');
+        // Optionally show a user-friendly error message
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+                content: Text('Error processing crime alert. Please try again.'),
+                backgroundColor: Colors.red,
+            ),
+        );
+    }
+  }
+
+  // Add method to show crime alert
+  void _showCrimeAlert(Map<String, dynamic> crime) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('⚠️ Crime Alert'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('A new crime has been reported near your route:'),
+            SizedBox(height: 10),
+            Text('Type: ${crime['crime_type']}'),
+            Text('Time: ${crime['time']}'),
+            Text('Location: ${crime['city']}'),
+            SizedBox(height: 10),
+            Text('Please stay alert and consider taking an alternative route.',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('OK'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _findRoutes(); // Find alternative routes
+            },
+            child: Text('Find Alternative Route'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Update _startNavigation method
   void _startNavigation() {
     print('Starting navigation...');
     print('Alternative routes length: ${_alternativeRoutes.length}');
@@ -642,13 +841,18 @@ class _MapScreenState extends State<MapScreen> {
       context,
     );
 
+    // Start monitoring for new crimes
+    _startCrimeMonitoring();
+
     setState(() {
       isNavigating = _navigationService.isNavigating;
     });
   }
 
+  // Update _stopNavigation method
   void _stopNavigation() {
     _navigationService.stopNavigation();
+    _stopCrimeMonitoring(); // Stop monitoring crimes
     setState(() {});
   }
 
@@ -736,7 +940,7 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _selectSuggestion(Map<String, dynamic> suggestion,
-      {required bool isSource}) {
+      {required bool isSource}) async {
     if (isSource) {
       _sourceController.text = suggestion['name'];
       _sourceLocation = suggestion['coordinates'];
@@ -744,6 +948,14 @@ class _MapScreenState extends State<MapScreen> {
         _showSourceSuggestions = false;
         _sourceSuggestions = [];
       });
+      
+      // Detect city from source location
+      String? detectedCity = await _detectCityFromCoordinates(_sourceLocation!);
+      if (detectedCity != null) {
+        setState(() {
+          _selectedCity = detectedCity;
+        });
+      }
     } else {
       _destinationController.text = suggestion['name'];
       _destinationLocation = suggestion['coordinates'];
@@ -751,6 +963,14 @@ class _MapScreenState extends State<MapScreen> {
         _showDestinationSuggestions = false;
         _destinationSuggestions = [];
       });
+      
+      // Detect city from destination location
+      String? detectedCity = await _detectCityFromCoordinates(_destinationLocation!);
+      if (detectedCity != null) {
+        setState(() {
+          _selectedCity = detectedCity;
+        });
+      }
     }
 
     _mapController.move(suggestion['coordinates'], 15.0);
@@ -758,6 +978,35 @@ class _MapScreenState extends State<MapScreen> {
     // If both source and destination are set, find routes
     if (_sourceLocation != null && _destinationLocation != null) {
       _findRoutes();
+    }
+  }
+
+  // Add this new method to detect city from coordinates
+  Future<String?> _detectCityFromCoordinates(latlong.LatLng location) async {
+    try {
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        location.latitude,
+        location.longitude,
+      );
+
+      if (placemarks.isNotEmpty) {
+        Placemark place = placemarks.first;
+        String? city = place.locality;
+        
+        // Check if the detected city is one of our supported cities
+        if (city != null) {
+          String cityLower = city.toLowerCase();
+          if (cityLower.contains('islamabad') || 
+              cityLower.contains('karachi') || 
+              cityLower.contains('lahore')) {
+            return city;
+          }
+        }
+      }
+      return null;
+    } catch (e) {
+      print("Error detecting city: $e");
+      return null;
     }
   }
 
@@ -1197,25 +1446,43 @@ class _MapScreenState extends State<MapScreen> {
                                       ),
                                     ),
                                     SizedBox(height: 10),
-                                    Align(
-                                      alignment: Alignment.center,
-                                      child: Container(
-                                        padding: EdgeInsets.symmetric(
-                                            horizontal: 12, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: _primaryColor,
-                                          borderRadius:
-                                              BorderRadius.circular(20),
-                                        ),
-                                        child: Text(
-                                          "Safety: ${selectedRoute['safetyScore'].toStringAsFixed(2)}",
-                                          style: TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 15,
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        Container(
+                                          padding: EdgeInsets.symmetric(
+                                              horizontal: 12, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: _primaryColor,
+                                            borderRadius: BorderRadius.circular(20),
+                                          ),
+                                          child: Text(
+                                            "Safety: ${selectedRoute['safetyScore'].toStringAsFixed(2)}",
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 15,
+                                            ),
                                           ),
                                         ),
-                                      ),
+                                        SizedBox(width: 10),
+                                        Container(
+                                          padding: EdgeInsets.symmetric(
+                                              horizontal: 12, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: _dangerColor,
+                                            borderRadius: BorderRadius.circular(20),
+                                          ),
+                                          child: Text(
+                                            "Crimes: ${selectedRoute['crimeCount']}",
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 15,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                     SizedBox(height: 10),
                                     Row(
@@ -1478,6 +1745,7 @@ class _MapScreenState extends State<MapScreen> {
 
   @override
   void dispose() {
+    _stopCrimeMonitoring(); // Clean up crime monitoring
     _mlService.dispose();
     _mapController.dispose();
     _sourceController.dispose();
