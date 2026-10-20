@@ -99,6 +99,3 @@ The app uses Provider pattern for state management with three main providers:
 ### License
 This project is licensed under the MIT License - see the LICENSE file for details
 
-### Contact
-Your Name - your.email@example.com
-Project Link: https://github.com/your-username/SafeRoute-Project
